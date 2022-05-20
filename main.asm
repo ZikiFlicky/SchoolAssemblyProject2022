@@ -6,9 +6,10 @@ DATASEG
     TOKEN_TYPE_VAR = 1
     TOKEN_TYPE_EQU = 2
     TOKEN_TYPE_PLUS = 3
-    TOKEN_TYPE_NUMBER = 4
-    TOKEN_TYPE_NEWLINE = 5
-    TOKEN_TYPE_SHOW = 6
+    TOKEN_TYPE_MINUS = 4
+    TOKEN_TYPE_NUMBER = 5
+    TOKEN_TYPE_NEWLINE = 6
+    TOKEN_TYPE_SHOW = 7
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -21,15 +22,40 @@ DATASEG
     INSTRUCTION_TYPE_ASSIGN = 1
     INSTRUCTION_TYPE_SHOW = 2
 
+    ; Expr types
+    EXPR_TYPE_NUMBER = 1
+    EXPR_TYPE_ADD = 2
+    EXPR_TYPE_SUB = 3
+
+    ; Expr offsets
+    EXPR_OFF_TYPE = 0
+
+    EXPR_NUMBER_OFF_NUMBER = 1
+
+    EXPR_BINARY_OFF_LHS = 1
+    EXPR_BINARY_OFF_RHS = 3
+
+    EXPR_MAX_SIZE = 5
+
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
 
     INSTRUCTION_ASSIGN_OFF_KEY = 1
-    INSTRUCTION_ASSIGN_OFF_NUMBER = 3
+    INSTRUCTION_ASSIGN_OFF_EXPR = 3
 
-    INSTRUCTION_SHOW_OFF_NUMBER = 1
+    INSTRUCTION_SHOW_OFF_EXPR = 1
 
     INSTRUCTION_MAX_SIZE = 5
+
+    ; Object types
+    OBJECT_TYPE_NUMBER = 1
+
+    ; Object offsets
+    OBJECT_OFF_TYPE = 0
+
+    OBJECT_NUMBER_OFF_NUMBER = 1
+
+    OBJECT_MAX_SIZE = 3
 
     ; File related
     filename db "CODE.TXT", 0
@@ -53,6 +79,7 @@ DATASEG
     ; Parser error related stuff
     parser_error_start db "ParserError: $"
     parser_error_invalid_token db "Invalid token$"
+    parser_error_syntax_error db "Syntax error$"
     parser_error_expected_newline db "Expected newline$"
     ; Panic related stuff
     panic_message db "* PANIC *", 13, 10, "$" ; TODO: Highlighting here doesn't work, report bug
@@ -286,6 +313,12 @@ exact_fit:
     mov bx, ax
     mov ah, 48h
     int 21h
+    jnc allocation_success
+
+    ; If we got here, we had an allocation failure
+    mov ax, 0
+
+allocation_success:
 
     pop bx
     pop bp
@@ -1016,6 +1049,13 @@ proc lex
     test ax, ax
     jnz end_lex
 
+    mov ah, TOKEN_TYPE_MINUS
+    mov al, '-'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz end_lex
+
     ; FIXME: This should exit somewhere
     push offset lexer_error_invalid_token
     call lexer_error
@@ -1030,6 +1070,28 @@ end_lex:
 endp lex
 
 ; Parser procedures
+
+; Returns segment of new expr with the given type
+expr_type = bp + 4
+proc expr_new
+    push bp
+    mov bp, sp
+    push es
+
+    ; Allocate
+    push EXPR_MAX_SIZE
+    call heap_alloc
+    mov es, ax
+    ; Add type
+    mov ax, [expr_type]
+    mov [es:EXPR_OFF_TYPE], al
+    ; Prepare for return
+    mov ax, es
+
+    pop es
+    pop bp
+    ret 2
+endp expr_new
 
 ; Returns segment of new instruction with the given type
 instruction_type = bp + 4
@@ -1121,142 +1183,9 @@ end_match:
     ret 2
 endp parser_match
 
-key_token = bp - TOKEN_SIZE
-value_token = bp - TOKEN_SIZE - TOKEN_SIZE
-key_segment = bp - TOKEN_SIZE - TOKEN_SIZE - 2
-number = bp - TOKEN_SIZE - TOKEN_SIZE - 2 - 2
-proc parser_parse_assignment
-    push bp
-    mov bp, sp
-    sub sp, TOKEN_SIZE + TOKEN_SIZE + 2 + 2
-    push es
-
-    push TOKEN_TYPE_VAR
-    call parser_match
-    test ax, ax
-    jnz assignment_var_found
-
-    jmp not_parse_assignment
-
-assignment_var_found:
-
-    ; Copy current token into key_token
-    lea ax, [key_token]
-    push ax
-    push ss
-    call token_copy
-
-    push TOKEN_TYPE_EQU
-    call parser_match
-    test ax, ax
-    jz assignment_error_no_equal_sign
-
-    push TOKEN_TYPE_NUMBER
-    call parser_match
-    test ax, ax
-    jz assignment_error_no_value
-
-    ; Copy token into the given pointer
-    lea ax, [value_token]
-    push ax
-    push ss
-    call token_copy
-
-    ; Set the global token to the key token
-    lea ax, [key_token]
-    push ax
-    push ss
-    call token_set
-    ; Convert to cstr (NUL-terminated string)
-    call token_to_cstr
-    mov [key_segment], ax
-
-    ; Set the global token to the value token
-    lea ax, [value_token]
-    push ax
-    push ss
-    call token_set
-    ; Convert to number
-    call token_to_number
-    mov [number], ax
-
-    ; Create new instruction with type Assign
-    push INSTRUCTION_TYPE_ASSIGN
-    call instruction_new
-
-    ; Make es point to the new instruction segment
-    mov es, ax
-    ; Store the key in the instruction
-    mov ax, [key_segment]
-    mov [es:INSTRUCTION_ASSIGN_OFF_KEY], ax
-    ; Store the number in the instruction
-    mov ax, [number]
-    mov [es:INSTRUCTION_ASSIGN_OFF_NUMBER], ax
-
-    ; Move es back to ax so we can return the pointer to the instruction
-    mov ax, es
-
-    jmp end_parse_assignment
-
-assignment_error_no_equal_sign:
-assignment_error_no_value:
-    push offset parser_error_invalid_token
-    call parser_error
-    jmp end_parse_assignment
-
-not_parse_assignment:
-    mov ax, 0
-
-end_parse_assignment:
-
-    pop es
-    add sp, TOKEN_SIZE + TOKEN_SIZE + 2 + 2
-    pop bp
-    ret
-endp parser_parse_assignment
-
-proc parser_parse_show
-    push es
-
-    push TOKEN_TYPE_SHOW
-    call parser_match
-    test ax, ax
-    jz not_parse_show
-
-    push TOKEN_TYPE_NUMBER
-    call parser_match
-    test ax, ax
-    jz show_error_no_value
-
-    push INSTRUCTION_TYPE_SHOW
-    call instruction_new
-    mov es, ax
-
-    ; Convert the number token into a value
-    call token_to_number
-
-    mov [es:INSTRUCTION_SHOW_OFF_NUMBER], ax
-
-    mov ax, es
-    jmp end_parse_show
-
-show_error_no_value:
-    push offset parser_error_invalid_token
-    call parser_error
-    jmp end_parse_show
-
-not_parse_show:
-    mov ax, 0
-
-end_parse_show:
-
-    pop es
-    ret
-endp parser_parse_show
-
 ; TODO: Maybe make this return a bool, allowing us to not exit in parser_error?
 backtrack = bp - 2
-proc expect_newline
+proc parser_expect_newline
     push bp
     mov bp, sp
     sub sp, 2 ; Allocate space for backtrack
@@ -1285,7 +1214,238 @@ newline_reached:
     add sp, 2
     pop bp
     ret
-endp expect_newline
+endp parser_expect_newline
+
+number = bp - 2
+proc parser_parse_expr_number
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    ; Try to match a number token
+    push TOKEN_TYPE_NUMBER
+    call parser_match
+    jz parse_expr_number_finish
+
+    call token_to_number ; Moves the actual number into ax
+    mov [number], ax
+
+    push EXPR_TYPE_NUMBER
+    call expr_new
+    mov es, ax
+
+    mov ax, [number]
+    mov [es:EXPR_NUMBER_OFF_NUMBER], ax
+
+    ; Move the address of the expr to ax so we can return it
+    mov ax, es
+    jmp parse_expr_number_finish
+
+parse_expr_number_failed:
+    mov ax, 0
+
+parse_expr_number_finish:
+
+    pop es
+    add sp, 2
+    pop bp
+    ret
+endp parser_parse_expr_number
+
+left_ptr = bp - 2
+right_ptr = bp - 4
+new_expr_type = bp - 6
+proc parser_parse_expr_sum
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    call parser_parse_expr_number
+    jz parse_expr_sum_failed
+    mov [left_ptr], ax
+
+parse_expr_sum_loop:
+    push TOKEN_TYPE_PLUS
+    call parser_match
+    test ax, ax
+    jnz parse_expr_sum_matched_plus
+    push TOKEN_TYPE_MINUS
+    call parser_match
+    test ax, ax
+    jnz parse_expr_sum_matched_minus
+
+    mov ax, [left_ptr]
+    jmp parse_expr_sum_finish
+
+parse_expr_sum_matched_plus:
+    mov [word ptr new_expr_type], EXPR_TYPE_ADD
+    jmp parse_expr_sum_end_operator_match
+
+parse_expr_sum_matched_minus:
+    mov [word ptr new_expr_type], EXPR_TYPE_SUB
+
+parse_expr_sum_end_operator_match:
+
+    ; Try to parse the expr after the operator
+    call parser_parse_expr_number
+    test ax, ax
+    jz parse_expr_sum_error_expected_expr
+    mov [right_ptr], ax
+
+    ; Create a new expr and put the information into it
+    push [new_expr_type]
+    call expr_new
+    mov es, ax
+    mov ax, [left_ptr]
+    mov [es:EXPR_BINARY_OFF_LHS], ax
+    mov ax, [right_ptr]
+    mov [es:EXPR_BINARY_OFF_RHS], ax
+    mov [left_ptr], es
+
+    jmp parse_expr_sum_loop
+
+parse_expr_sum_error_expected_expr:
+    push offset parser_error_syntax_error
+    call parser_error
+
+parse_expr_sum_failed:
+    mov ax, 0
+
+parse_expr_sum_finish:
+
+    pop es
+    add sp, 6
+    pop bp
+    ret
+endp parser_parse_expr_sum
+
+; The upmost expression parser
+proc parser_parse_expr
+    call parser_parse_expr_sum
+    ret
+endp parser_parse_expr
+
+key_token = bp - TOKEN_SIZE
+expr_ptr = bp - TOKEN_SIZE - 2
+key_segment = bp - TOKEN_SIZE - 2 - 2
+proc parser_parse_assignment
+    push bp
+    mov bp, sp
+    sub sp, TOKEN_SIZE + 2 + 2
+    push es
+
+    push TOKEN_TYPE_VAR
+    call parser_match
+    test ax, ax
+    jnz assignment_var_found
+
+    jmp not_parse_assignment
+
+assignment_var_found:
+
+    ; Copy current token into key_token
+    lea ax, [key_token]
+    push ax
+    push ss
+    call token_copy
+
+    push TOKEN_TYPE_EQU
+    call parser_match
+    test ax, ax
+    jz assignment_error_no_equal_sign
+
+    call parser_parse_expr
+    test ax, ax
+    jz assignment_error_no_value
+
+    ; Set the global token to the key token
+    lea ax, [key_token]
+    push ax
+    push ss
+    call token_set
+    ; Convert to cstr (NUL-terminated string)
+    call token_to_cstr
+    mov [key_segment], ax
+
+    ; Create new instruction with type Assign
+    push INSTRUCTION_TYPE_ASSIGN
+    call instruction_new
+
+    ; Make es point to the new instruction segment
+    mov es, ax
+    ; Store the key in the instruction
+    mov ax, [key_segment]
+    mov [es:INSTRUCTION_ASSIGN_OFF_KEY], ax
+    ; Store the number in the instruction
+    mov ax, [expr_ptr]
+    mov [es:INSTRUCTION_ASSIGN_OFF_EXPR], ax
+
+    ; Move es back to ax so we can return the pointer to the instruction
+    mov ax, es
+
+    jmp end_parse_assignment
+
+assignment_error_no_equal_sign:
+assignment_error_no_value:
+    push offset parser_error_invalid_token
+    call parser_error
+    jmp end_parse_assignment
+
+not_parse_assignment:
+    mov ax, 0
+
+end_parse_assignment:
+
+    pop es
+    add sp, TOKEN_SIZE + 2 + 2
+    pop bp
+    ret
+endp parser_parse_assignment
+
+expr_ptr = bp - 2
+proc parser_parse_show
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    push TOKEN_TYPE_SHOW
+    call parser_match
+    test ax, ax
+    jz not_parse_show
+
+    call parser_parse_expr
+    test ax, ax
+    jz show_error_no_value
+    mov [expr_ptr], ax
+
+    push INSTRUCTION_TYPE_SHOW
+    call instruction_new
+    mov es, ax
+
+    mov ax, [expr_ptr]
+    mov [es:INSTRUCTION_SHOW_OFF_EXPR], ax
+
+    mov ax, es
+    jmp end_parse_show
+
+show_error_no_value:
+    push offset parser_error_invalid_token
+    call parser_error
+    jmp end_parse_show
+
+not_parse_show:
+    mov ax, 0
+
+end_parse_show:
+
+    pop es
+    add sp, 2
+    pop bp
+    ret
+endp parser_parse_show
 
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
@@ -1302,7 +1462,7 @@ proc parser_parse_instruction
     jmp end_parse_instruction
 
 parsed_instruction:
-    call expect_newline
+    call parser_expect_newline
 
 end_parse_instruction:
 
@@ -1341,6 +1501,212 @@ endp parser_parse
 
 ; Interpreter procedures
 
+object_type = bp + 4
+proc object_new
+    push bp
+    mov bp, sp
+    push es
+
+    ; Allocate
+    push OBJECT_MAX_SIZE
+    call heap_alloc
+    mov es, ax
+    ; Add type
+    mov ax, [object_type]
+    mov [es:OBJECT_OFF_TYPE], al
+    ; Prepare for return
+    mov ax, es
+
+    pop es
+    pop bp
+    ret 2
+endp object_new
+
+expr_ptr = bp + 4
+number = bp - 2
+proc expr_number_eval
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    ; Store the expr segment
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    ; Store the number
+    mov ax, [es:EXPR_NUMBER_OFF_NUMBER]
+    mov [number], ax
+
+    ; Create a value
+    push OBJECT_TYPE_NUMBER
+    call object_new
+    mov es, ax
+
+    ; Set the value's number
+    mov ax, [number]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; Set ax to new value so we can return it
+    mov ax, es
+
+    pop es
+    add sp, 2
+    pop bp
+    ret 2
+endp expr_number_eval
+
+expr_ptr = bp + 4
+operator_func = bp + 6
+lhs_value = bp - 2
+rhs_value = bp - 4
+lhs_number = bp - 6
+rhs_number = bp - 8
+proc expr_binary_eval
+    push bp
+    mov bp, sp
+    sub sp, 8
+    push es
+
+    ; Store the expr segment
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    ; Eval lhs
+    push [es:EXPR_BINARY_OFF_LHS]
+    call expr_eval
+    mov [lhs_value], ax
+    ; Eval rhs
+    push [es:EXPR_BINARY_OFF_RHS]
+    call expr_eval
+    mov [rhs_value], ax
+
+    ; FIXME: Make sure we have a number in lhs and rhs
+    mov ax, [lhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov [lhs_number], ax
+
+    mov ax, [rhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov [rhs_number], ax
+
+    ; Create a value
+    push OBJECT_TYPE_NUMBER
+    call object_new
+    mov es, ax
+
+    ; Set the value's number
+    push [rhs_number]
+    push [lhs_number]
+    mov ax, [operator_func]
+    call ax
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; Set ax to new value so we can return it
+    mov ax, es
+
+    pop es
+    add sp, 8
+    pop bp
+    ret 4
+endp expr_binary_eval
+
+lhs = bp + 4
+rhs = bp + 6
+proc operator_add_func
+    push bp
+    mov bp, sp
+
+    mov ax, [lhs]
+    add ax, [rhs]
+
+    pop bp
+    ret 4
+endp operator_add_func
+
+lhs = bp + 4
+rhs = bp + 6
+proc operator_sub_func
+    push bp
+    mov bp, sp
+
+    mov ax, [lhs]
+    sub ax, [rhs]
+
+    pop bp
+    ret 4
+endp operator_sub_func
+
+expr_ptr = bp + 4
+proc expr_add_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_add_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_add_eval
+
+expr_ptr = bp + 4
+proc expr_sub_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_sub_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_sub_eval
+
+expr_ptr = bp + 4
+proc expr_eval
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    mov al, [es:EXPR_OFF_TYPE]
+
+    cmp al, EXPR_TYPE_NUMBER
+    je choice_eval_number
+    cmp al, EXPR_TYPE_ADD
+    je choice_eval_add
+    cmp al, EXPR_TYPE_SUB
+    je choice_eval_sub
+
+    ; If we got here, our type code is invalid
+    call panic
+
+choice_eval_number:
+    push [expr_ptr]
+    call expr_number_eval
+    jmp end_choice_eval
+
+choice_eval_add:
+    push [expr_ptr]
+    call expr_add_eval
+    jmp end_choice_eval
+
+choice_eval_sub:
+    push [expr_ptr]
+    call expr_sub_eval
+
+end_choice_eval:
+
+    pop es
+    pop bp
+    ret 2
+endp expr_eval
+
 instruction_ptr = bp + 4
 proc instruction_assign_execute
     push bp
@@ -1351,7 +1717,11 @@ proc instruction_assign_execute
     mov ax, [instruction_ptr]
     mov es, ax
 
-    push [es:INSTRUCTION_ASSIGN_OFF_NUMBER] ; value
+    ; Eval expr and return value into ax
+    push [es:INSTRUCTION_ASSIGN_OFF_EXPR] ; value
+    call expr_eval
+
+    push ax ; Push the value
     push [es:INSTRUCTION_ASSIGN_OFF_KEY] ; key
     call interpreter_set_variable
 
@@ -1371,7 +1741,15 @@ proc instruction_show_execute
     mov ax, [instruction_ptr]
     mov es, ax
 
-    push [es:INSTRUCTION_SHOW_OFF_NUMBER] ; value
+    ; Eval expr and return value into ax
+    push [es:INSTRUCTION_SHOW_OFF_EXPR]
+    call expr_eval
+    mov es, ax
+
+    ; FIXME: Verify this a number
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+
+    push ax
     call print_word
     call print_newline
 
