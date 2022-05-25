@@ -24,8 +24,9 @@ DATASEG
 
     ; Expr types
     EXPR_TYPE_NUMBER = 1
-    EXPR_TYPE_ADD = 2
-    EXPR_TYPE_SUB = 3
+    EXPR_TYPE_VAR = 2
+    EXPR_TYPE_ADD = 3
+    EXPR_TYPE_SUB = 4
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
@@ -34,6 +35,8 @@ DATASEG
 
     EXPR_BINARY_OFF_LHS = 1
     EXPR_BINARY_OFF_RHS = 3
+
+    EXPR_VAR_OFF_NAME = 1
 
     EXPR_MAX_SIZE = 5
 
@@ -82,11 +85,23 @@ DATASEG
     parser_error_syntax_error db "Syntax error$"
     parser_error_expected_newline db "Expected newline$"
     ; Panic related stuff
-    panic_message db "* PANIC *", 13, 10, "$" ; TODO: Highlighting here doesn't work, report bug
+    panic_message db "* PANIC *", 13, 10, "$"
 
     ; FIXME: This can overflow + only allows a certain amount of instructions
     parsed_instructions dw 10h dup(?)
     amount_instructions dw 0
+
+    ; Interpreter error stuff
+    runtime_error_start db "RuntimeError: $"
+    runtime_error_variable_not_found db "Variable not found$"
+
+    ; TODO: Free instructions
+
+    ; TODO: Make this a hashmap?
+    ; FIXME: Allows up to 16 variables
+    ; Interpreter stuff
+    variables dw 10h * 2 dup(?)
+    amount_variables db 0
 CODESEG
 
 ; Misc functions
@@ -325,6 +340,59 @@ allocation_success:
     ret 2
 endp heap_alloc
 
+heapstr1 = bp + 4
+heapstr2 = bp + 6
+index = bp - 2
+proc cstrs_eq
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push bx
+    push cx
+    push es
+
+    mov [word ptr index], 0
+
+loop_cstrs:
+    mov bx, [index]
+    ; Get char from first string
+    mov ax, [heapstr1]
+    mov es, ax
+    mov cl, [es:bx]
+    ; Get char from second string
+    mov ax, [heapstr2]
+    mov es, ax
+    mov ch, [es:bx]
+
+    cmp cl, ch
+    jne cstrs_not_equal
+
+    ; If the characters are NULs
+    cmp cl, 0
+    jne cstrs_reloop
+
+    ; If we got here, we matched (characters were all the same and NUL is in the same index)
+    mov ax, 1
+    jmp end_loop_cstrs
+
+cstrs_reloop:
+
+    inc [word ptr index]
+    jmp loop_cstrs
+
+cstrs_not_equal:
+    mov ax, 0
+
+end_loop_cstrs:
+
+    pop es
+    pop cx
+    pop bx
+    add sp, 2
+    pop bp
+    ret 4
+endp cstrs_eq
+
 ; File procedures
 
 proc open_file
@@ -343,6 +411,18 @@ proc open_file
     pop ax
     ret
 endp open_file
+
+proc close_file
+    push ax
+
+    ; Interrupt for closing files
+    mov ah, 3Eh
+    mov bx, [file]
+    int 21h
+
+    pop ax 
+    ret
+endp close_file
 
 idx = bp + 4
 proc file_set_idx
@@ -964,6 +1044,10 @@ proc lexer_error
     int 21h
     call print_newline
 
+    ; FIXME: We shouldn't exit here, but this is our only way now
+    mov ax, 4C00h
+    int 21h
+
     pop dx
     pop cx
     pop bx
@@ -1056,7 +1140,6 @@ proc lex
     test ax, ax
     jnz end_lex
 
-    ; FIXME: This should exit somewhere
     push offset lexer_error_invalid_token
     call lexer_error
 
@@ -1253,6 +1336,59 @@ parse_expr_number_finish:
     ret
 endp parser_parse_expr_number
 
+var_name = bp - 2
+proc parser_parse_expr_var    
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    push TOKEN_TYPE_VAR
+    call parser_match
+    test ax, ax
+    jz not_found_expr_var
+
+    call token_to_cstr
+    mov [var_name], ax
+
+    push EXPR_TYPE_VAR
+    call expr_new
+    mov es, ax
+
+    mov ax, [var_name]
+    mov [es:EXPR_VAR_OFF_NAME], ax
+
+    mov ax, es
+    jmp end_parse_expr_var
+
+not_found_expr_var:
+    mov ax, 0
+
+end_parse_expr_var:
+
+    pop es
+    add sp, 2
+    pop bp
+    ret
+endp parser_parse_expr_var
+
+; Parse values/variables
+proc parser_parse_expr_single
+    call parser_parse_expr_var
+    test ax, ax
+    jnz found_single_expr
+    call parser_parse_expr_number
+    test ax, ax
+    jnz found_single_expr
+
+    ; If we got here, nothing was parsed
+    mov ax, 0
+
+found_single_expr:
+
+    ret
+endp parser_parse_expr_single
+
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
@@ -1262,7 +1398,7 @@ proc parser_parse_expr_sum
     sub sp, 6
     push es
 
-    call parser_parse_expr_number
+    call parser_parse_expr_single
     jz parse_expr_sum_failed
     mov [left_ptr], ax
 
@@ -1289,7 +1425,7 @@ parse_expr_sum_matched_minus:
 parse_expr_sum_end_operator_match:
 
     ; Try to parse the expr after the operator
-    call parser_parse_expr_number
+    call parser_parse_expr_single
     test ax, ax
     jz parse_expr_sum_error_expected_expr
     mov [right_ptr], ax
@@ -1359,6 +1495,7 @@ assignment_var_found:
     call parser_parse_expr
     test ax, ax
     jz assignment_error_no_value
+    mov [expr_ptr], ax ; Store expr
 
     ; Set the global token to the key token
     lea ax, [key_token]
@@ -1404,6 +1541,7 @@ end_parse_assignment:
     ret
 endp parser_parse_assignment
 
+; Parse the SHOW instruction
 expr_ptr = bp - 2
 proc parser_parse_show
     push bp
@@ -1470,7 +1608,11 @@ end_parse_instruction:
 endp parser_parse_instruction
 
 ; Parse all of the file
+backtrack = bp - 2
 proc parser_parse
+    push bp
+    mov bp, sp
+    sub sp, 2
     push ax
     push bx
 
@@ -1490,12 +1632,32 @@ try_parse_instruction:
     inc [word ptr amount_instructions]
     jmp try_parse_instruction
 
+    ; End of parsing
 instruction_parsing_failed:
-    ; TODO: Check here if you have a remainder of non-parsable code
-    ; call panic
+    ; Check here if you have a remainder of non-parsable code
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    call lex
+    test ax, ax
+    jz no_code_remainer
+
+    ; If we got here, we have some remainder code that cannot be parsed, so we should error
+
+    ; Reload to the place before the token
+    push [backtrack]
+    call file_set_idx
+
+    ; Error
+    push offset parser_error_syntax_error
+    call parser_error
+
+no_code_remainer:
 
     pop bx
     pop ax
+    add sp, 2
+    pop bp
     ret
 endp parser_parse
 
@@ -1555,6 +1717,33 @@ proc expr_number_eval
     pop bp
     ret 2
 endp expr_number_eval
+
+expr_ptr = bp + 4
+proc expr_var_eval
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    mov ax, [es:EXPR_VAR_OFF_NAME]
+    push ax
+    call interpreter_get_variable
+
+    test ax, ax
+    jnz found_variable
+
+    ; If we got here, we didn't find a variable
+    push offset runtime_error_variable_not_found
+    call interpreter_runtime_error
+
+found_variable:
+
+    pop es
+    pop bp
+    ret 2
+endp expr_var_eval
 
 expr_ptr = bp + 4
 operator_func = bp + 6
@@ -1678,6 +1867,8 @@ proc expr_eval
 
     cmp al, EXPR_TYPE_NUMBER
     je choice_eval_number
+    cmp al, EXPR_TYPE_VAR
+    je choice_eval_var
     cmp al, EXPR_TYPE_ADD
     je choice_eval_add
     cmp al, EXPR_TYPE_SUB
@@ -1689,6 +1880,11 @@ proc expr_eval
 choice_eval_number:
     push [expr_ptr]
     call expr_number_eval
+    jmp end_choice_eval
+
+choice_eval_var:
+    push [expr_ptr]
+    call expr_var_eval
     jmp end_choice_eval
 
 choice_eval_add:
@@ -1746,7 +1942,7 @@ proc instruction_show_execute
     call expr_eval
     mov es, ax
 
-    ; FIXME: Verify this a number
+    ; FIXME: Verify this is a number
     mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
 
     push ax
@@ -1803,18 +1999,16 @@ proc interpreter_execute
     push bx
 
     mov ax, 0
+    lea bx, [parsed_instructions]
 execute_instruction:
     cmp ax, [amount_instructions]
     jge end_execute_instruction
-
-    mov bx, ax
-    shl bx, 1 ; Mul by 2 to align as words (because we store pointers to instructions)
-    add bx, offset parsed_instructions ; Add base to the offset to have base+index
 
     push [bx]
     call instruction_execute
 
     inc ax
+    add bx, 2
     jmp execute_instruction
 
 end_execute_instruction:
@@ -1824,42 +2018,135 @@ end_execute_instruction:
     ret
 endp interpreter_execute
 
-; TODO: Add real functionality of setting values
 key = bp + 4
 value = bp + 6
 proc interpreter_set_variable
     push bp
     mov bp, sp
     push ax
-    push dx
+    push bx
+    push cx
 
-    push ds ; NOTE: This behavior isn't that great because we might need to use global data-segment variables in procedures
+    mov ax, 0
+    lea bx, [variables]
+find_variable:
+    cmp ax, [word ptr amount_variables]
+    je end_find_variable ; This will set the variable in the next spot
+
+    push [key]
+    push [bx + 2]
+    call cstrs_eq
+    test ax, ax
+    jz not_found_variable
+
+    ; If we got here, we matched a variable, so we need to set a new value
+    mov cx, [value]
+    mov [bx + 2], cx
+
+    jmp variable_was_set
+
+not_found_variable:
+
+    inc ax
+    add bx, 4
+    jmp find_variable
+
+end_find_variable:
+
+    ; Bx stores the next index
     mov ax, [key]
-    mov ds, ax
-    push 0 ; Offset is always zero to segment-aligned heap blocks
-    call print_nul_terminated_string
-    pop ds
-    ; Show newline
-    call print_newline
+    mov [bx + 0], ax
+    mov ax, [value]
+    mov [bx + 2], ax
+    inc [word ptr amount_variables]
 
-    pop dx
+variable_was_set:
+
+    pop cx
+    pop bx
     pop ax
     pop bp
     ret 4
 endp interpreter_set_variable
+
+name_ptr = bp + 4
+proc interpreter_get_variable
+    push bp
+    mov bp, sp
+    push bx
+
+    mov ax, 0
+    lea bx, [variables]
+find_get_variable:
+    cmp ax, [word ptr amount_variables]
+    je not_found_get_variable
+
+    push [bx + 0]
+    push [name_ptr]
+    call cstrs_eq
+
+    test ax, ax
+    jnz found_get_variable
+
+    inc ax
+    add bx, 4
+    jmp find_get_variable
+
+found_get_variable:
+    mov ax, [bx + 2]
+    jmp end_find_get_variable
+
+not_found_get_variable:
+    mov ax, 0
+
+end_find_get_variable:
+
+    pop bx
+    pop bp
+    ret 2
+endp interpreter_get_variable
+
+message_ptr = bp + 4
+proc interpreter_runtime_error
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; ParserError:
+    mov ah, 09h
+    lea dx, [byte ptr runtime_error_start]
+    int 21h
+    ; Some error message
+    mov ah, 09h
+    mov dx, [message_ptr]
+    int 21h
+    call print_newline
+
+    ; FIXME: We shouldn't exit here, but this is our only way now
+    mov ax, 4C00h
+    int 21h
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 2
+endp interpreter_runtime_error
 
 start:
     mov ax, @data
     mov ds, ax
 
     call open_file
-; relex:
-;     call lex
-;     test ax, ax
-;     jne relex
 
     call parser_parse
     call interpreter_execute
+
+    call close_file
 
     ; exit
     mov ax, 4C00h
