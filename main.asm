@@ -18,10 +18,6 @@ DATASEG
 
     TOKEN_SIZE = 5
 
-    ; Instruction types
-    INSTRUCTION_TYPE_ASSIGN = 1
-    INSTRUCTION_TYPE_SHOW = 2
-
     ; Expr types
     EXPR_TYPE_NUMBER = 1
     EXPR_TYPE_VAR = 2
@@ -39,6 +35,10 @@ DATASEG
     EXPR_VAR_OFF_NAME = 1
 
     EXPR_MAX_SIZE = 5
+
+    ; Instruction types
+    INSTRUCTION_TYPE_ASSIGN = 1
+    INSTRUCTION_TYPE_SHOW = 2
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -339,6 +339,24 @@ allocation_success:
     pop bp
     ret 2
 endp heap_alloc
+
+address = bp + 4
+proc heap_free
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [address]
+    mov es, ax
+    mov ah, 49h
+    int 21h
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp heap_free
 
 heapstr1 = bp + 4
 heapstr2 = bp + 6
@@ -1176,6 +1194,50 @@ proc expr_new
     ret 2
 endp expr_new
 
+expr_ptr = bp + 4
+proc expr_delete
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    mov al, [es:EXPR_OFF_TYPE]
+
+    cmp al, EXPR_TYPE_VAR
+    je @@choice_var
+    cmp al, EXPR_TYPE_ADD
+    je @@choice_binary
+    cmp al, EXPR_TYPE_SUB
+    je @@choice_binary
+
+    ; We don't need to remove anything
+    jmp @@choice_end
+
+@@choice_var:
+    push [es:EXPR_VAR_OFF_NAME]
+    call heap_free
+    jmp @@choice_end
+
+@@choice_binary:
+    push [es:EXPR_BINARY_OFF_LHS]
+    call expr_delete
+    push [es:EXPR_BINARY_OFF_RHS]
+    call expr_delete
+
+@@choice_end:
+
+    push es
+    call heap_free
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp expr_delete
+
 ; Returns segment of new instruction with the given type
 instruction_type = bp + 4
 proc instruction_new
@@ -1197,6 +1259,50 @@ proc instruction_new
     pop bp
     ret 2
 endp instruction_new
+
+instruction_ptr = bp + 4
+proc instruction_delete
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    mov al, [es:INSTRUCTION_OFF_TYPE]
+
+    ; Remove contents by type
+    cmp al, INSTRUCTION_TYPE_ASSIGN
+    je @@choice_assign
+    cmp al, INSTRUCTION_TYPE_SHOW
+    je @@choice_show
+
+    ; If we got here we might not need to delete it
+    jmp @@choice_end
+
+@@choice_assign:
+    push [es:INSTRUCTION_ASSIGN_OFF_KEY]
+    call heap_free
+    push [es:INSTRUCTION_ASSIGN_OFF_EXPR]
+    call expr_delete
+    jmp @@choice_end
+
+@@choice_show:
+    push [es:INSTRUCTION_SHOW_OFF_EXPR]
+    call expr_delete
+
+@@choice_end:
+
+    ; Free the address of the whole instruction
+    push es
+    call heap_free
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp instruction_delete
 
 message_ptr = bp + 4
 proc parser_error
@@ -1660,6 +1766,31 @@ no_code_remainer:
     pop bp
     ret
 endp parser_parse
+
+proc parser_delete
+    push ax
+    push bx
+
+    mov ax, 0
+    mov bx, offset parsed_instructions
+
+@@loop_instructions:
+    cmp ax, [amount_instructions]
+    je @@end_loop_instructions
+
+    push [bx]
+    call instruction_delete
+
+    inc ax
+    add bx, 2
+    jmp @@loop_instructions
+
+@@end_loop_instructions:
+
+    pop bx
+    pop ax
+    ret
+endp parser_delete
 
 ; Interpreter procedures
 
@@ -2145,6 +2276,7 @@ start:
 
     call parser_parse
     call interpreter_execute
+    call parser_delete
 
     call close_file
 
