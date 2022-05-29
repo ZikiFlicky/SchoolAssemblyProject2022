@@ -10,6 +10,10 @@ DATASEG
     TOKEN_TYPE_NUMBER = 5
     TOKEN_TYPE_NEWLINE = 6
     TOKEN_TYPE_SHOW = 7
+    TOKEN_TYPE_IF = 8
+    TOKEN_TYPE_ELSE = 9
+    TOKEN_TYPE_LEFT_BRACE = 10
+    TOKEN_TYPE_RIGHT_BRACE = 11
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -39,6 +43,7 @@ DATASEG
     ; Instruction types
     INSTRUCTION_TYPE_ASSIGN = 1
     INSTRUCTION_TYPE_SHOW = 2
+    INSTRUCTION_TYPE_IF = 3
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -48,7 +53,11 @@ DATASEG
 
     INSTRUCTION_SHOW_OFF_EXPR = 1
 
-    INSTRUCTION_MAX_SIZE = 5
+    INSTRUCTION_IF_OFF_EXPR = 1
+    INSTRUCTION_IF_OFF_BLOCK = 3
+    INSTRUCTION_IF_OFF_ELSE_BLOCK = 5
+
+    INSTRUCTION_MAX_SIZE = 7
 
     ; Object types
     OBJECT_TYPE_NUMBER = 1
@@ -72,8 +81,10 @@ DATASEG
 
     ; Lexer related stuff
     keyword_show db TOKEN_TYPE_SHOW, 4, "show"
-    keywords dw offset keyword_show
-    amount_keywords db 1
+    keyword_if db TOKEN_TYPE_IF, 2, "if"
+    keyword_else db TOKEN_TYPE_ELSE, 4, "else"
+    keywords dw offset keyword_show, offset keyword_if, offset keyword_else
+    AMOUNT_KEYWORDS = 3
 
     ; Lexer error related stuff
     lexer_error_start db "LexerError: $"
@@ -94,8 +105,6 @@ DATASEG
     ; Interpreter error stuff
     runtime_error_start db "RuntimeError: $"
     runtime_error_variable_not_found db "Variable not found$"
-
-    ; TODO: Free instructions
 
     ; TODO: Make this a hashmap?
     ; FIXME: Allows up to 16 variables
@@ -826,12 +835,12 @@ end_number_lex:
     ret
 endp lex_number
 
-; TODO: Speed can be improved when `keywords` is sorted, by storing information about max characters that are possible to read and minimum that don't have keyword char after them
+keyword_ptr = bp + 4
 backtrack = bp - 2
 keyword_length = bp - 4
 keyword_token_type = bp - 5
 keyword_start_ptr = bp - 7
-proc lex_keywords
+proc lex_single_keyword
     push bp
     mov bp, sp
     sub sp, 7
@@ -841,16 +850,7 @@ proc lex_keywords
     mov ax, [file_idx]
     mov [backtrack], ax
 
-    mov cx, 0
-lex_single_keyword:
-    mov al, [amount_keywords]
-    cbw
-    cmp cx, ax
-    jge no_keyword_lex
-
-    mov bx, cx
-    shl bx, 1
-    mov bx, [keywords + bx]
+    mov bx, [keyword_ptr]
     mov al, [bx + 0]
     mov [keyword_token_type], al
     lea ax, [bx + 2]
@@ -859,37 +859,35 @@ lex_single_keyword:
     cbw
     mov [word ptr keyword_length], ax
 
-    ; Check with one additional char
     inc ax
     push ax
     call read_bytes
     test ax, ax
-    jz no_additional_keyword_char
+    jz @@read_less
 
     ; If we got here, we need to check if the last character is a keyword char or not
     lea bx, [file_read_buffer]
-    mov ax, [keyword_length]
-    add bx, ax
+    add bx, [keyword_length]
     mov al, [bx]
     cbw
     push ax
     call is_char_var ; Check if keyword char
     test ax, ax
-    jnz keyword_no_match
+    jnz @@lex_failed
 
+    ; Used to read just enough bytes if the last byte was not a keyword character or if there is no additional character (EOF)
+@@read_less:
+    ; Restore previous state
     push [backtrack]
     call file_set_idx
 
-no_additional_keyword_char:
-    ; Try to read just enough data
     push [keyword_length]
     call read_bytes
     test ax, ax
-    jz keyword_no_match
+    jz @@lex_failed
 
-    ; NOTE: This loop forces us to have keywords that have a length greater than 0
     mov cx, 0
-keyword_char_cmp:
+@@keyword_char_cmp:
     mov bx, [keyword_start_ptr]
     add bx, cx
     mov al, [bx]
@@ -899,13 +897,13 @@ keyword_char_cmp:
     mov ah, [bx]
 
     cmp al, ah
-    jne keyword_no_match
+    jne @@lex_failed
 
     inc cx
     cmp cx, [keyword_length]
-    jl keyword_char_cmp
+    jl @@keyword_char_cmp
 
-    ; If we got here, we matched the keyword
+    ; If we got here, we succeeded
     mov al, [keyword_token_type]
     mov [token_type], al
     mov ax, [keyword_length]
@@ -914,24 +912,56 @@ keyword_char_cmp:
     mov [token_start_idx], ax
 
     mov ax, 1
-    jmp end_keyword_lexing
+    jmp @@lex_end
 
-no_keyword_lex:
-    mov ax, 0
-    jmp end_keyword_lexing
-
-keyword_no_match:
-
+@@lex_failed:
     push [backtrack]
     call file_set_idx
-    inc cx
-    jmp lex_single_keyword
 
-end_keyword_lexing:
+    mov ax, 0
+
+@@lex_end:
 
     pop cx
     pop bx
     add sp, 7
+    pop bp
+    ret 2
+endp lex_single_keyword
+
+proc lex_keywords
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+
+    mov cx, 0
+    lea bx, [keywords]
+
+@@loop_keywords:
+    cmp cx, AMOUNT_KEYWORDS
+    je @@failed_finding_keyword
+
+    push [bx]
+    call lex_single_keyword
+    test ax, ax
+    jnz @@succeeded_finding_keyword
+
+    inc cx
+    add bx, 2
+    jmp @@loop_keywords
+
+@@succeeded_finding_keyword:
+    mov ax, 1
+    jmp @@end_keyword_match
+
+@@failed_finding_keyword:
+    mov ax, 0
+
+@@end_keyword_match:
+
+    pop cx
+    pop bx
     pop bp
     ret
 endp lex_keywords
@@ -1158,6 +1188,20 @@ proc lex
     test ax, ax
     jnz end_lex
 
+    mov ah, TOKEN_TYPE_LEFT_BRACE
+    mov al, '{'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz end_lex
+
+    mov ah, TOKEN_TYPE_RIGHT_BRACE
+    mov al, '}'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz end_lex
+
     push offset lexer_error_invalid_token
     call lexer_error
 
@@ -1277,6 +1321,8 @@ proc instruction_delete
     je @@choice_assign
     cmp al, INSTRUCTION_TYPE_SHOW
     je @@choice_show
+    cmp al, INSTRUCTION_TYPE_IF
+    je @@choice_if
 
     ; If we got here we might not need to delete it
     jmp @@choice_end
@@ -1291,6 +1337,20 @@ proc instruction_delete
 @@choice_show:
     push [es:INSTRUCTION_SHOW_OFF_EXPR]
     call expr_delete
+    jmp @@choice_end
+
+@@choice_if:
+    push [es:INSTRUCTION_IF_OFF_EXPR]
+    call expr_delete
+    push [es:INSTRUCTION_IF_OFF_BLOCK]
+    call block_delete
+    cmp [word ptr es:INSTRUCTION_IF_OFF_ELSE_BLOCK], 0
+    je @@if_no_else_block
+    ; If we got here we have an else block
+    push [es:INSTRUCTION_IF_OFF_ELSE_BLOCK]
+    call block_delete
+
+@@if_no_else_block:
 
 @@choice_end:
 
@@ -1691,6 +1751,104 @@ end_parse_show:
     ret
 endp parser_parse_show
 
+; Parse the IF instruction
+expr_ptr = bp - 2
+block_ptr = bp - 4
+else_block_ptr = bp - 6
+proc parser_parse_if
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    push TOKEN_TYPE_IF
+    call parser_match
+    test ax, ax
+    jnz @@start_parse
+
+    ; If not matched an if-statement
+    jmp @@not_parse_if
+
+@@start_parse:
+
+    call parser_parse_expr
+    test ax, ax
+    jz @@if_error_no_value
+    mov [expr_ptr], ax
+
+    call parser_parse_block
+    test ax, ax
+    jz @@if_error_no_block
+    mov [block_ptr], ax
+
+    ; See if we have an else
+    push TOKEN_TYPE_ELSE
+    call parser_match
+    test ax, ax
+    jz @@not_found_else
+
+    call parser_parse_block
+    test ax, ax
+    jz @@not_found_else_block
+    mov [else_block_ptr], ax
+
+    jmp @@create_if_instruction
+
+@@not_found_else_block:
+    push offset parser_error_syntax_error
+    call parser_error
+    jmp @@end_parse_if
+
+@@not_found_else:
+    mov [word ptr else_block_ptr], 0
+
+@@create_if_instruction:
+
+    push INSTRUCTION_TYPE_IF
+    call instruction_new
+    mov es, ax
+
+    mov ax, [expr_ptr]
+    mov [es:INSTRUCTION_IF_OFF_EXPR], ax
+
+    mov ax, [block_ptr]
+    mov [es:INSTRUCTION_IF_OFF_BLOCK], ax
+
+    mov ax, [else_block_ptr]
+    mov [es:INSTRUCTION_IF_OFF_ELSE_BLOCK], ax
+
+    mov ax, es
+    jmp @@end_parse_if
+
+@@if_error_no_value:
+    push offset parser_error_invalid_token
+    call parser_error
+    jmp @@end_parse_if
+
+@@if_error_no_block:
+    push offset parser_error_syntax_error
+    call parser_error
+    jmp @@end_parse_if
+
+@@not_parse_if:
+    mov ax, 0
+    jmp @@end_parse
+
+@@end_parse_if:
+    ; push TOKEN_TYPE_
+    ; push TOKEN_TYPE_ELSE
+    ; call parser_match
+    ; test ax, ax
+    ; jz @@end_parse
+
+@@end_parse:
+
+    pop es
+    add sp, 6
+    pop bp
+    ret
+endp parser_parse_if
+
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
 proc parser_parse_instruction
@@ -1698,6 +1856,9 @@ proc parser_parse_instruction
     test ax, ax
     jnz parsed_instruction
     call parser_parse_show
+    test ax, ax
+    jnz parsed_instruction
+    call parser_parse_if
     test ax, ax
     jnz parsed_instruction
 
@@ -1712,6 +1873,58 @@ end_parse_instruction:
 
     ret
 endp parser_parse_instruction
+
+proc parser_parse_block
+    push bp
+    mov bp, sp
+    push bx
+    push es
+
+    ; FIXME: Be able to extend the list
+    push 2 * (7 + 1)
+    call heap_alloc
+    mov es, ax
+
+    push TOKEN_TYPE_LEFT_BRACE
+    call parser_match
+    test ax, ax
+    jz block_parse_failed
+
+    call parser_expect_newline
+
+    mov bx, 0 ; Offset
+parse_block_instruction:
+    push TOKEN_TYPE_RIGHT_BRACE
+    call parser_match
+    test ax, ax
+    jnz finish_block
+
+    call parser_parse_instruction
+    test ax, ax
+    jz block_parse_failed
+
+    ; Set the parsed instruction
+    mov [es:bx], ax
+
+    add bx, 2
+    jmp parse_block_instruction
+
+finish_block:
+    ; Set a NUL at the end
+    mov [word ptr es:bx], 0
+    mov ax, es
+    jmp block_parse_end
+
+block_parse_failed:
+    mov ax, 0
+
+block_parse_end:
+
+    pop es
+    pop bx
+    pop bp
+    ret
+endp parser_parse_block
 
 ; Parse all of the file
 backtrack = bp - 2
@@ -1814,6 +2027,61 @@ proc object_new
     pop bp
     ret 2
 endp object_new
+
+object_ptr = bp + 4
+proc object_number_to_bool
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    test ax, ax
+
+    test ax, ax
+    jnz @@object_truthy
+
+    mov ax, 0
+    jmp @@object_check_end
+
+@@object_truthy:
+    mov ax, 1
+
+@@object_check_end:
+
+    pop es
+    pop bp
+    ret 2
+endp object_number_to_bool
+
+object_ptr = bp + 4
+proc object_to_bool
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov al, [es:OBJECT_OFF_TYPE]
+
+    cmp al, OBJECT_TYPE_NUMBER
+    je @@choice_number
+
+    call panic
+
+@@choice_number:
+    push es
+    call object_number_to_bool
+
+@@choice_end:
+
+    pop es
+    pop bp
+    ret 2
+endp object_to_bool
 
 expr_ptr = bp + 4
 number = bp - 2
@@ -2086,6 +2354,47 @@ proc instruction_show_execute
     ret 2
 endp instruction_show_execute
 
+instrcution_ptr = bp + 4
+proc instruction_if_execute
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    push [es:INSTRUCTION_IF_OFF_EXPR]
+    call expr_eval
+
+    push ax
+    call object_to_bool
+
+    test ax, ax
+    jz @@if_expr_failed
+
+    ; If we got here, the expression was truthy so we need to execute the block
+
+    push [es:INSTRUCTION_IF_OFF_BLOCK]
+    call block_execute
+    jmp @@end_execute
+
+@@if_expr_failed:
+    cmp [word ptr es:INSTRUCTION_IF_OFF_ELSE_BLOCK], 0
+    je @@end_execute
+
+    ; If we got here, we have an else block we need to execute
+    push [es:INSTRUCTION_IF_OFF_ELSE_BLOCK]
+    call block_execute
+
+@@end_execute:
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp instruction_if_execute
+
 instruction_ptr = bp + 4
 proc instruction_execute
     push bp
@@ -2096,12 +2405,14 @@ proc instruction_execute
     mov ax, [instruction_ptr]
     mov es, ax
 
-    mov ah, [es:INSTRUCTION_OFF_TYPE]
+    mov al, [es:INSTRUCTION_OFF_TYPE]
 
-    cmp ah, INSTRUCTION_TYPE_ASSIGN
+    cmp al, INSTRUCTION_TYPE_ASSIGN
     je choice_instruction_assign
-    cmp ah, INSTRUCTION_TYPE_SHOW
+    cmp al, INSTRUCTION_TYPE_SHOW
     je choice_instruction_show
+    cmp al, INSTRUCTION_TYPE_IF
+    je choice_instruction_if
 
     ; If we got here nothing matched, so we need to panic
     call panic
@@ -2116,6 +2427,11 @@ choice_instruction_assign:
 choice_instruction_show:
     push es
     call instruction_show_execute
+    jmp end_instruction_choice
+
+choice_instruction_if:
+    push es
+    call instruction_if_execute
 
 end_instruction_choice:
 
@@ -2124,6 +2440,72 @@ end_instruction_choice:
     pop bp
     ret 2
 endp instruction_execute
+
+; FIXME: Implement
+block_ptr = bp + 4
+proc block_delete
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push es
+
+    mov ax, [block_ptr]
+    mov es, ax
+
+    ; Loop until reached NULL
+    mov bx, 0
+@@remove_instruction:
+    mov ax, [es:bx]
+    test ax, ax
+    jz @@end_remove_block
+
+    push ax
+    call instruction_delete
+
+    add bx, 2
+    jmp @@remove_instruction
+
+@@end_remove_block:
+
+    pop es
+    pop bx
+    pop ax
+    pop bp
+    ret 2
+endp block_delete
+
+block_ptr = bp + 4
+proc block_execute
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push es
+
+    mov ax, [block_ptr]
+    mov es, ax
+
+    mov bx, 0
+loop_block:
+    mov ax, [es:bx]
+    test ax, ax
+    jz end_loop_block
+
+    push ax
+    call instruction_execute
+
+    add bx, 2
+    jmp loop_block
+
+end_loop_block:
+
+    pop es
+    pop bx
+    pop ax
+    pop bp
+    ret 2
+endp block_execute
 
 proc interpreter_execute
     push ax
