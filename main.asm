@@ -12,8 +12,9 @@ DATASEG
     TOKEN_TYPE_SHOW = 7
     TOKEN_TYPE_IF = 8
     TOKEN_TYPE_ELSE = 9
-    TOKEN_TYPE_LEFT_BRACE = 10
-    TOKEN_TYPE_RIGHT_BRACE = 11
+    TOKEN_TYPE_LOOP = 10
+    TOKEN_TYPE_LEFT_BRACE = 11
+    TOKEN_TYPE_RIGHT_BRACE = 12
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -44,6 +45,7 @@ DATASEG
     INSTRUCTION_TYPE_ASSIGN = 1
     INSTRUCTION_TYPE_SHOW = 2
     INSTRUCTION_TYPE_IF = 3
+    INSTRUCTION_TYPE_LOOP = 4
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -56,6 +58,9 @@ DATASEG
     INSTRUCTION_IF_OFF_EXPR = 1
     INSTRUCTION_IF_OFF_BLOCK = 3
     INSTRUCTION_IF_OFF_ELSE_BLOCK = 5
+
+    INSTRUCTION_LOOP_OFF_EXPR = 1
+    INSTRUCTION_LOOP_OFF_BLOCK = 3
 
     INSTRUCTION_MAX_SIZE = 7
 
@@ -83,8 +88,9 @@ DATASEG
     keyword_show db TOKEN_TYPE_SHOW, 4, "show"
     keyword_if db TOKEN_TYPE_IF, 2, "if"
     keyword_else db TOKEN_TYPE_ELSE, 4, "else"
-    keywords dw offset keyword_show, offset keyword_if, offset keyword_else
-    AMOUNT_KEYWORDS = 3
+    keyword_loop db TOKEN_TYPE_LOOP, 4, "loop"
+    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop
+    AMOUNT_KEYWORDS = 4
 
     ; Lexer error related stuff
     lexer_error_start db "LexerError: $"
@@ -1323,6 +1329,8 @@ proc instruction_delete
     je @@choice_show
     cmp al, INSTRUCTION_TYPE_IF
     je @@choice_if
+    cmp al, INSTRUCTION_TYPE_LOOP
+    je @@choice_loop
 
     ; If we got here we might not need to delete it
     jmp @@choice_end
@@ -1351,6 +1359,13 @@ proc instruction_delete
     call block_delete
 
 @@if_no_else_block:
+    jmp @@choice_end
+
+@@choice_loop:
+    push [es:INSTRUCTION_LOOP_OFF_EXPR]
+    call expr_delete
+    push [es:INSTRUCTION_LOOP_OFF_BLOCK]
+    call block_delete
 
 @@choice_end:
 
@@ -1794,11 +1809,6 @@ proc parser_parse_if
 
     jmp @@create_if_instruction
 
-@@not_found_else_block:
-    push offset parser_error_syntax_error
-    call parser_error
-    jmp @@end_parse_if
-
 @@not_found_else:
     mov [word ptr else_block_ptr], 0
 
@@ -1818,28 +1828,22 @@ proc parser_parse_if
     mov [es:INSTRUCTION_IF_OFF_ELSE_BLOCK], ax
 
     mov ax, es
-    jmp @@end_parse_if
+    jmp @@end_parse
 
 @@if_error_no_value:
     push offset parser_error_invalid_token
     call parser_error
-    jmp @@end_parse_if
+    jmp @@end_parse
 
+@@not_found_else_block:
 @@if_error_no_block:
     push offset parser_error_syntax_error
     call parser_error
-    jmp @@end_parse_if
+    jmp @@end_parse
 
 @@not_parse_if:
     mov ax, 0
     jmp @@end_parse
-
-@@end_parse_if:
-    ; push TOKEN_TYPE_
-    ; push TOKEN_TYPE_ELSE
-    ; call parser_match
-    ; test ax, ax
-    ; jz @@end_parse
 
 @@end_parse:
 
@@ -1848,6 +1852,70 @@ proc parser_parse_if
     pop bp
     ret
 endp parser_parse_if
+
+; Parse the loop instruction
+expr_ptr = bp - 2
+block_ptr = bp - 4
+proc parser_parse_loop
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push es
+
+    push TOKEN_TYPE_LOOP
+    call parser_match
+    test ax, ax
+    jnz @@start_parse
+
+    ; If not matched a loop-statement
+    jmp @@not_parse_loop
+
+@@start_parse:
+
+    call parser_parse_expr
+    test ax, ax
+    jz @@loop_error_no_value
+    mov [expr_ptr], ax
+
+    call parser_parse_block
+    test ax, ax
+    jz @@loop_error_no_block
+    mov [block_ptr], ax
+
+    push INSTRUCTION_TYPE_LOOP
+    call instruction_new
+    mov es, ax
+
+    mov ax, [expr_ptr]
+    mov [es:INSTRUCTION_LOOP_OFF_EXPR], ax
+
+    mov ax, [block_ptr]
+    mov [es:INSTRUCTION_LOOP_OFF_BLOCK], ax
+
+    mov ax, es
+    jmp @@end_parse
+
+@@loop_error_no_value:
+    push offset parser_error_invalid_token
+    call parser_error
+    jmp @@end_parse
+
+@@loop_error_no_block:
+    push offset parser_error_syntax_error
+    call parser_error
+    jmp @@end_parse
+
+@@not_parse_loop:
+    mov ax, 0
+    jmp @@end_parse
+
+@@end_parse:
+
+    pop es
+    add sp, 4
+    pop bp
+    ret
+endp parser_parse_loop
 
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
@@ -1859,6 +1927,9 @@ proc parser_parse_instruction
     test ax, ax
     jnz parsed_instruction
     call parser_parse_if
+    test ax, ax
+    jnz parsed_instruction
+    call parser_parse_loop
     test ax, ax
     jnz parsed_instruction
 
@@ -2396,6 +2467,40 @@ proc instruction_if_execute
 endp instruction_if_execute
 
 instruction_ptr = bp + 4
+proc instruction_loop_execute
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+@@try_loop:
+    push [es:INSTRUCTION_LOOP_OFF_EXPR]
+    call expr_eval
+
+    push ax
+    call object_to_bool
+
+    test ax, ax
+    jz @@loop_condition_failed
+
+    ; If we got here, the expression was truthy so we need to execute the block
+    push [es:INSTRUCTION_LOOP_OFF_BLOCK]
+    call block_execute
+
+    jmp @@try_loop
+
+@@loop_condition_failed:
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp instruction_loop_execute
+
+instruction_ptr = bp + 4
 proc instruction_execute
     push bp
     mov bp, sp
@@ -2413,6 +2518,8 @@ proc instruction_execute
     je choice_instruction_show
     cmp al, INSTRUCTION_TYPE_IF
     je choice_instruction_if
+    cmp al, INSTRUCTION_TYPE_LOOP
+    je choice_instruction_loop
 
     ; If we got here nothing matched, so we need to panic
     call panic
@@ -2432,6 +2539,11 @@ choice_instruction_show:
 choice_instruction_if:
     push es
     call instruction_if_execute
+    jmp end_instruction_choice
+
+choice_instruction_loop:
+    push es
+    call instruction_loop_execute
 
 end_instruction_choice:
 
@@ -2487,18 +2599,18 @@ proc block_execute
     mov es, ax
 
     mov bx, 0
-loop_block:
+@@loop_block:
     mov ax, [es:bx]
     test ax, ax
-    jz end_loop_block
+    jz @@end_loop_block
 
     push ax
     call instruction_execute
 
     add bx, 2
-    jmp loop_block
+    jmp @@loop_block
 
-end_loop_block:
+@@end_loop_block:
 
     pop es
     pop bx
@@ -2540,38 +2652,31 @@ proc interpreter_set_variable
     push bx
     push cx
 
-    mov ax, 0
+    mov cx, 0
     lea bx, [variables]
-find_variable:
-    cmp ax, [word ptr amount_variables]
-    je end_find_variable ; This will set the variable in the next spot
+@@find_variable:
+    cmp cx, [word ptr amount_variables]
+    je @@not_found_variable ; Add a new variable
 
     push [key]
-    push [bx + 2]
+    push [bx + 0]
     call cstrs_eq
     test ax, ax
-    jz not_found_variable
+    jnz @@set_variable
 
-    ; If we got here, we matched a variable, so we need to set a new value
-    mov cx, [value]
-    mov [bx + 2], cx
-
-    jmp variable_was_set
-
-not_found_variable:
-
-    inc ax
+    inc cx
     add bx, 4
-    jmp find_variable
+    jmp @@find_variable
 
-end_find_variable:
+@@not_found_variable:
+    inc [word ptr amount_variables]
 
+@@set_variable:
     ; Bx stores the next index
     mov ax, [key]
     mov [bx + 0], ax
     mov ax, [value]
     mov [bx + 2], ax
-    inc [word ptr amount_variables]
 
 variable_was_set:
 
