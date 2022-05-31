@@ -92,12 +92,18 @@ DATASEG
     keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop
     AMOUNT_KEYWORDS = 4
 
+    ; Error related stuff
+    file_error_line_message db " [line $"
+    file_error_column_message db ", column $"
+    file_error_end db "]: $"
+    file_error_code_line_start db "> $"
+
     ; Lexer error related stuff
-    lexer_error_start db "LexerError: $"
+    lexer_error_start db "LexerError$"
     lexer_error_invalid_token db "Invalid token$"
 
     ; Parser error related stuff
-    parser_error_start db "ParserError: $"
+    parser_error_start db "ParserError$"
     parser_error_invalid_token db "Invalid token$"
     parser_error_syntax_error db "Syntax error$"
     parser_error_expected_newline db "Expected newline$"
@@ -426,6 +432,124 @@ end_loop_cstrs:
     ret 4
 endp cstrs_eq
 
+; Shows an error
+error_start_ptr = bp + 4
+message_ptr = bp + 6
+index = bp + 8
+line = bp - 2
+column = bp - 4
+proc show_file_error
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; TODO: remove_whitespace
+
+    mov ah, 09h
+    mov dx, [error_start_ptr]
+    int 21h
+
+    mov ah, 09h
+    lea dx, [byte ptr file_error_line_message]
+    int 21h
+
+    push [index]
+    call file_get_line_col_of_index
+    mov [line], ax
+    mov [column], bx
+
+    push [line]
+    call print_word
+
+    mov ah, 09h
+    lea dx, [byte ptr file_error_column_message]
+    int 21h
+
+    push [column]
+    call print_word
+
+    mov ah, 09h
+    lea dx, [byte ptr file_error_end]
+    int 21h
+
+    ; Some error message
+    mov ah, 09h
+    mov dx, [message_ptr]
+    int 21h
+    call print_newline
+
+    mov ah, 09h
+    lea dx, [byte ptr file_error_code_line_start]
+    int 21h
+
+    ; Print rest of line
+    mov ax, [index]
+    mov bx, [column]
+    dec bx
+    sub ax, bx
+    push ax
+    call print_line_from_index
+
+    call print_newline
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    add sp, 4
+    pop bp
+    ret 6
+endp show_file_error
+
+index = bp + 4
+backtrack = bp - 2
+proc print_line_from_index
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push ax
+    push bx
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    push [index]
+    call file_set_idx
+
+@@read_line:
+    call file_read_newline
+    test ax, ax
+    jnz @@end_read_line
+    push 1
+    call read_bytes
+    test ax, ax
+    jz @@end_read_line
+
+    ; Put the character
+    mov ah, 0Eh
+    mov al, [file_read_buffer + 0]
+    mov bx, 0
+    int 10h
+
+    jmp @@read_line
+
+@@end_read_line:
+
+    ; Reload
+    push [backtrack]
+    call file_set_idx
+
+    pop bx
+    pop ax
+    add sp, 2
+    pop bp
+    ret 2
+endp print_line_from_index
+
 ; File procedures
 
 proc open_file
@@ -530,6 +654,112 @@ no_error:
     ret 2
 endp read_bytes
 
+; FIXME: Had "mov [token_type], TOKEN_TYPE_NEWLINE" which shouldn't be allowed
+
+backtrack = bp - 2
+proc file_read_newline
+    push bp
+    mov bp, sp
+    sub sp, 2
+
+    ; Store backtrack
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    push 2
+    call read_bytes
+    test ax, ax
+    jz @@not_found_newline ; You have to have 2 bytes for this
+
+    cmp [byte ptr file_read_buffer], 13
+    jne @@maybe_starts_with_linefeed
+    cmp [byte ptr file_read_buffer + 1], 10
+    jne @@not_found_newline
+
+    jmp @@had_newline
+
+@@maybe_starts_with_linefeed:
+    cmp [byte ptr file_read_buffer], 10
+    jne @@not_found_newline
+    cmp [byte ptr file_read_buffer + 1], 13
+    jne @@not_found_newline
+
+    jmp @@had_newline
+
+@@not_found_newline:
+    push [backtrack]
+    call file_set_idx
+
+    mov ax, 0
+    jmp @@finish_newline_lex
+
+@@had_newline:
+    mov ax, 1
+
+@@finish_newline_lex:
+
+    add sp, 2
+    pop bp
+    ret
+endp file_read_newline
+
+index = bp + 4
+backtrack = bp - 2
+line = bp - 4
+column = bp - 6
+proc file_get_line_col_of_index
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push cx
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    ; Set to beggining
+    push 0
+    call file_set_idx
+
+    ; Set info
+    mov [word ptr line], 1
+    mov [word ptr column], 1
+
+    mov cx, 0
+@@read_file:
+    cmp cx, [index]
+    jge @@end_read_file
+    call file_read_newline
+    test ax, ax
+    jnz @@read_newline
+    push 1
+    call read_bytes
+    test ax, ax
+    jnz @@read_character
+
+    ; We get here when index is bigger than the file (which is impossible logically)
+    call panic
+
+@@read_newline:
+    inc [word ptr line]
+    mov [word ptr column], 1
+    add cx, 2
+    jmp @@read_file
+
+@@read_character:
+    inc [word ptr column]
+    inc cx
+    jmp @@read_file
+
+@@end_read_file:
+
+    mov ax, [line]
+    mov bx, [column]
+
+    pop cx
+    add sp, 6
+    pop bp
+    ret 2
+endp file_get_line_col_of_index
 
 ; Token procedures
 
@@ -712,64 +942,43 @@ endp token_to_number
 ; Lexer procedures
 
 ; Returns into ax a bool sayng if we were able to lex the newline
-backtrack = bp - 2
-times_newline = bp - 4
+times_newline = bp - 2
 proc lex_newline
     push bp
     mov bp, sp
-    sub sp, 4
+    sub sp, 2
 
-    mov [token_type], TOKEN_TYPE_NEWLINE
+    mov [byte ptr token_type], TOKEN_TYPE_NEWLINE
     mov ax, [file_idx]
     mov [token_start_idx], ax ; The file index
     mov [word ptr token_length], 0
 
     mov [word ptr times_newline], 0
 
-find_newline:
-    ; Store backtrack
-    mov ax, [file_idx]
-    mov [backtrack], ax
-
-    push 2
-    call read_bytes
+@@find_newline:
+    call file_read_newline
     test ax, ax
-    jz not_found_newline ; You have to have 2 bytes for this
+    jz @@not_found_newline
 
-    cmp [byte ptr file_read_buffer], 13
-    jne maybe_starts_with_linefeed
-    cmp [byte ptr file_read_buffer + 1], 10
-    jne not_found_newline
-
-    jmp found_newline
-
-maybe_starts_with_linefeed:
-    cmp [byte ptr file_read_buffer], 10
-    jne not_found_newline
-    cmp [byte ptr file_read_buffer + 1], 13
-    jne not_found_newline
-
-found_newline:
-    inc [word ptr times_newline]
     add [word ptr token_length], 2
-    call remove_whitespace ; TODO: We should to add the length of the whitespace to the token length
-    jmp find_newline
+    call remove_whitespace
 
-not_found_newline:
-    push [backtrack]
-    call file_set_idx
+    inc [word ptr times_newline]
+    jmp @@find_newline
+
+@@not_found_newline:
     cmp [word ptr times_newline], 0
-    jg had_newlines
+    jg @@had_newlines
 
     mov ax, 0
-    jmp finish_newline_lex
+    jmp @@finish_newline_lex
 
-had_newlines:
+@@had_newlines:
     mov ax, 1
 
-finish_newline_lex:
+@@finish_newline_lex:
 
-    add sp, 4
+    add sp, 2
     pop bp
     ret
 endp lex_newline
@@ -1080,31 +1289,22 @@ lex_char_end:
 endp lex_char
 
 message_ptr = bp + 4
+index = bp + 6
 proc lexer_error
     push bp
     mov bp, sp
     push ax
-    push bx
-    push cx
-    push dx
 
-    ; LexerError:
-    mov ah, 09h
-    lea dx, [byte ptr lexer_error_start]
-    int 21h
-    ; Some error message
-    mov ah, 09h
-    mov dx, [message_ptr]
-    int 21h
-    call print_newline
+    push [index]
+    push [message_ptr]
+    push offset lexer_error_start
+    call show_file_error
 
     ; FIXME: We shouldn't exit here, but this is our only way now
-    mov ax, 4C00h
+    mov ah, 4Ch
+    mov al, 1
     int 21h
 
-    pop dx
-    pop cx
-    pop bx
     pop ax
     pop bp
     ret 2
@@ -1380,34 +1580,25 @@ proc instruction_delete
 endp instruction_delete
 
 message_ptr = bp + 4
+index = bp + 6
 proc parser_error
     push bp
     mov bp, sp
     push ax
-    push bx
-    push cx
-    push dx
 
-    ; ParserError:
-    mov ah, 09h
-    lea dx, [byte ptr parser_error_start]
-    int 21h
-    ; Some error message
-    mov ah, 09h
-    mov dx, [message_ptr]
-    int 21h
-    call print_newline
+    push [index]
+    push [message_ptr]
+    push offset parser_error_start
+    call show_file_error
 
     ; FIXME: We shouldn't exit here, but this is our only way now
-    mov ax, 4C00h
+    mov ah, 4Ch
+    mov al, 1
     int 21h
 
-    pop dx
-    pop cx
-    pop bx
     pop ax
     pop bp
-    ret 2
+    ret 4
 endp parser_error
 
 ; Returns into ax whether we matched a token type
@@ -1469,6 +1660,7 @@ proc parser_expect_newline
     ; If we got here, we should backtrack to the beggining of the token and error
     push [backtrack]
     call file_set_idx
+    push [backtrack]
     push offset parser_error_expected_newline
     call parser_error
 
@@ -1625,6 +1817,7 @@ parse_expr_sum_end_operator_match:
     jmp parse_expr_sum_loop
 
 parse_expr_sum_error_expected_expr:
+    push [file_idx]
     push offset parser_error_syntax_error
     call parser_error
 
@@ -1672,11 +1865,11 @@ assignment_var_found:
     push TOKEN_TYPE_EQU
     call parser_match
     test ax, ax
-    jz assignment_error_no_equal_sign
+    jz @@error_no_equal_sign
 
     call parser_parse_expr
     test ax, ax
-    jz assignment_error_no_value
+    jz @@error_no_value
     mov [expr_ptr], ax ; Store expr
 
     ; Set the global token to the key token
@@ -1706,8 +1899,9 @@ assignment_var_found:
 
     jmp end_parse_assignment
 
-assignment_error_no_equal_sign:
-assignment_error_no_value:
+@@error_no_equal_sign:
+@@error_no_value:
+    push [file_idx]
     push offset parser_error_invalid_token
     call parser_error
     jmp end_parse_assignment
@@ -1752,6 +1946,7 @@ proc parser_parse_show
     jmp end_parse_show
 
 show_error_no_value:
+    push [file_idx]
     push offset parser_error_invalid_token
     call parser_error
     jmp end_parse_show
@@ -1832,12 +2027,14 @@ proc parser_parse_if
     jmp @@end_parse
 
 @@if_error_no_value:
+    push [file_idx]
     push offset parser_error_invalid_token
     call parser_error
     jmp @@end_parse
 
 @@not_found_else_block:
 @@if_error_no_block:
+    push [file_idx]
     push offset parser_error_syntax_error
     call parser_error
     jmp @@end_parse
@@ -1897,11 +2094,13 @@ proc parser_parse_loop
     jmp @@end_parse
 
 @@loop_error_no_value:
+    push [file_idx]
     push offset parser_error_invalid_token
     call parser_error
     jmp @@end_parse
 
 @@loop_error_no_block:
+    push [file_idx]
     push offset parser_error_syntax_error
     call parser_error
     jmp @@end_parse
@@ -2040,6 +2239,7 @@ instruction_parsing_failed:
     call file_set_idx
 
     ; Error
+    push [file_idx]
     push offset parser_error_syntax_error
     call parser_error
 
@@ -2657,7 +2857,7 @@ proc interpreter_set_variable
     lea bx, [variables]
 @@find_variable:
     cmp cx, [word ptr amount_variables]
-    je @@not_found_variable ; Add a new variable
+    je @@add_new_variable ; Add a new variable
 
     push [key]
     push [bx + 0]
@@ -2669,7 +2869,7 @@ proc interpreter_set_variable
     add bx, 4
     jmp @@find_variable
 
-@@not_found_variable:
+@@add_new_variable:
     inc [word ptr amount_variables]
 
 @@set_variable:
@@ -2696,29 +2896,29 @@ proc interpreter_get_variable
 
     mov ax, 0
     lea bx, [variables]
-find_get_variable:
+@@find_variable:
     cmp ax, [word ptr amount_variables]
-    je not_found_get_variable
+    je @@not_found_variable
 
     push [bx + 0]
     push [name_ptr]
     call cstrs_eq
 
     test ax, ax
-    jnz found_get_variable
+    jnz @@found_variable
 
     inc ax
     add bx, 4
-    jmp find_get_variable
+    jmp @@find_variable
 
-found_get_variable:
+@@found_variable:
     mov ax, [bx + 2]
-    jmp end_find_get_variable
+    jmp @@end_find_variable
 
-not_found_get_variable:
+@@not_found_variable:
     mov ax, 0
 
-end_find_get_variable:
+@@end_find_variable:
 
     pop bx
     pop bp
