@@ -1490,6 +1490,7 @@ proc parser_parse_expr_number
     ; Try to match a number token
     push TOKEN_TYPE_NUMBER
     call parser_match
+    test ax, ax
     jz parse_expr_number_finish
 
     call token_to_number ; Moves the actual number into ax
