@@ -1638,13 +1638,12 @@ end_match:
     ret 2
 endp parser_match
 
-; TODO: Maybe make this return a bool, allowing us to not exit in parser_error?
+should_error = bp + 4
 backtrack = bp - 2
 proc parser_expect_newline
     push bp
     mov bp, sp
     sub sp, 2 ; Allocate space for backtrack
-    push ax
 
     ; Store backtrack
     mov ax, [file_idx]
@@ -1652,24 +1651,37 @@ proc parser_expect_newline
 
     call lex
     test ax, ax
-    jz newline_reached ; If we couldn't lex, this is the end of the file
+    jz @@newline_reached ; If we couldn't lex, this is the end of the file
 
     cmp [byte ptr token_type], TOKEN_TYPE_NEWLINE
-    je newline_reached
+    je @@newline_reached
 
-    ; If we got here, we should backtrack to the beggining of the token and error
+    ; If we got here, we should backtrack to the beggining of the token
     push [backtrack]
     call file_set_idx
+
+    ; If we shouldn't error we should return false
+    mov ax, [should_error]
+    test ax, ax
+    jz @@not_newline_reached
+
+    ; Error otherwise
     push [backtrack]
     push offset parser_error_expected_newline
     call parser_error
 
-newline_reached:
+@@newline_reached:
+    mov ax, 0
+    jmp @@end_expect_newline
 
-    pop ax
+@@not_newline_reached:
+    mov ax, 1
+
+@@end_expect_newline:
+
     add sp, 2
     pop bp
-    ret
+    ret 2
 endp parser_expect_newline
 
 number = bp - 2
@@ -2119,7 +2131,12 @@ endp parser_parse_loop
 
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
+instruction_ptr = bp - 2
 proc parser_parse_instruction
+    push bp
+    mov bp, sp
+    sub sp, 2
+
     call parser_parse_assignment
     test ax, ax
     jnz parsed_instruction
@@ -2134,14 +2151,19 @@ proc parser_parse_instruction
     jnz parsed_instruction
 
     ; If wasn't able to parse an instruction, return a NULL
-    mov ax, 0
+    mov [word ptr instruction_ptr], 0
     jmp end_parse_instruction
 
 parsed_instruction:
+    mov [word ptr instruction_ptr], ax ; Save the instruction in the stack
+    push 1
     call parser_expect_newline
 
 end_parse_instruction:
+    mov ax, [instruction_ptr]
 
+    add sp, 2
+    pop bp
     ret
 endp parser_parse_instruction
 
@@ -2161,6 +2183,7 @@ proc parser_parse_block
     test ax, ax
     jz block_parse_failed
 
+    push 0 ; Don't error if we don't match the newline
     call parser_expect_newline
 
     mov bx, 0 ; Offset
@@ -2205,6 +2228,10 @@ proc parser_parse
     sub sp, 2
     push ax
     push bx
+
+    ; If there's a newline at the start, ignore it
+    push 0
+    call parser_expect_newline
 
 try_parse_instruction:
     ; Store in bx where to write to in the data segment
