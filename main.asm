@@ -609,7 +609,7 @@ proc file_set_idx
 endp file_set_idx
 
 amount_bytes = bp + 4
-start_idx = bp - 2
+backtrack = bp - 2
 proc read_bytes
     push bp
     mov bp, sp
@@ -619,7 +619,7 @@ proc read_bytes
     push dx
 
     mov ax, [file_idx]
-    mov [start_idx], ax
+    mov [backtrack], ax
 
     mov ah, 3Fh
     mov bx, [file]
@@ -641,7 +641,7 @@ proc read_bytes
     jmp no_error
 
 had_error:
-    push [start_idx]
+    push [backtrack]
     call file_set_idx
     mov ax, 0
 no_error:
@@ -984,7 +984,7 @@ proc lex_newline
 endp lex_newline
 
 ; Returns into ax a bool saying if we were able to lex the number
-start_idx = bp - 2
+backtrack = bp - 2
 proc lex_number
     push bp
     mov bp, sp
@@ -992,7 +992,7 @@ proc lex_number
     push bx
 
     mov ax, [file_idx]
-    mov [start_idx], ax
+    mov [backtrack], ax
 
     push 1
     call read_bytes
@@ -1006,7 +1006,7 @@ proc lex_number
     jg not_number
 
     mov [token_type], TOKEN_TYPE_NUMBER
-    mov ax, [start_idx]
+    mov ax, [backtrack]
     mov [token_start_idx], ax
     mov [word ptr token_length], 0
 
@@ -1037,7 +1037,7 @@ end_number:
     jmp end_number_lex
 
 not_number:
-    push [start_idx]
+    push [backtrack]
     call file_set_idx
     mov ax, 0
     jmp end_number_lex
@@ -1182,14 +1182,14 @@ proc lex_keywords
 endp lex_keywords
 
 ; Returns into ax a bool saying if we were able to lex the variable name
-start_idx = bp - 2
+backtrack = bp - 2
 proc lex_var
     push bp
     mov bp, sp
     sub sp, 2
 
     mov ax, [file_idx]
-    mov [start_idx], ax
+    mov [backtrack], ax
 
     push 1
     call read_bytes
@@ -1204,7 +1204,7 @@ proc lex_var
     jz not_var
 
     mov [token_type], TOKEN_TYPE_VAR
-    mov ax, [start_idx]
+    mov ax, [backtrack]
     mov [token_start_idx], ax
     mov [word ptr token_length], 0
 
@@ -1236,7 +1236,7 @@ end_var:
     jmp end_var_lex
 
 not_var:
-    push [start_idx]
+    push [backtrack]
     call file_set_idx
     mov ax, 0
     jmp end_var_lex
@@ -1250,14 +1250,14 @@ endp lex_var
 
 new_token_type = bp + 5
 character = bp + 4
-start_idx = bp - 2
+backtrack = bp - 2
 proc lex_char
     push bp
     mov bp, sp
     sub sp, 2
 
     mov ax, [file_idx]
-    mov [start_idx], ax
+    mov [backtrack], ax
 
     push 1
     call read_bytes
@@ -1271,14 +1271,14 @@ proc lex_char
     ; Set token
     mov al, [new_token_type]
     mov [token_type], al
-    mov ax, [start_idx]
+    mov ax, [backtrack]
     mov [token_start_idx], ax
     mov [token_length], 1
     mov ax, 1
     jmp lex_char_end
 
 lex_char_fail:
-    push [start_idx]
+    push [backtrack]
     call file_set_idx
     mov ax, 0
 lex_char_end:
@@ -1338,7 +1338,7 @@ end_removing:
     ret
 endp remove_whitespace
 
-start_idx = bp - 2
+backtrack = bp - 2
 proc lex
     push bp
     mov bp, sp
@@ -1347,12 +1347,12 @@ proc lex
     call remove_whitespace
 
     mov ax, [file_idx]
-    mov [start_idx], ax
+    mov [backtrack], ax
 
     ; Check for EOF
     push 1
     call read_bytes
-    push [start_idx]
+    push [backtrack]
     call file_set_idx
     test ax, ax
     jz lex_failed
@@ -1603,14 +1603,14 @@ endp parser_error
 
 ; Returns into ax whether we matched a token type
 expected_type = bp + 4
-start_idx = bp - 2
+backtrack = bp - 2
 proc parser_match
     push bp
     mov bp, sp
     sub sp, 2
 
     mov ax, [file_idx]
-    mov [start_idx], ax
+    mov [backtrack], ax
 
     call lex
     test ax, ax
@@ -1627,7 +1627,7 @@ proc parser_match
     jmp end_match
 
 not_matched:
-    push [start_idx]
+    push [backtrack]
     call file_set_idx
     mov ax, 0
 
