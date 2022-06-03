@@ -69,10 +69,11 @@ DATASEG
 
     ; Object offsets
     OBJECT_OFF_TYPE = 0
+    OBJECT_OFF_REFCOUNT = 1
 
-    OBJECT_NUMBER_OFF_NUMBER = 1
+    OBJECT_NUMBER_OFF_NUMBER = 3
 
-    OBJECT_MAX_SIZE = 3
+    OBJECT_MAX_SIZE = 5
 
     ; File related
     filename db "CODE.TXT", 0
@@ -2319,6 +2320,7 @@ proc object_new
     ; Add type
     mov ax, [object_type]
     mov [es:OBJECT_OFF_TYPE], al
+    mov [word ptr es:OBJECT_OFF_REFCOUNT], 1
     ; Prepare for return
     mov ax, es
 
@@ -2326,6 +2328,53 @@ proc object_new
     pop bp
     ret 2
 endp object_new
+
+; Increment refcount
+object_ptr = bp + 4
+proc object_ref
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    inc [word ptr es:OBJECT_OFF_REFCOUNT]
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp object_ref
+
+; Decrement refcount and maybe remove the object
+object_ptr = bp + 4
+proc object_deref
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    ; Decrement the amount of references we have
+    dec [word ptr es:OBJECT_OFF_REFCOUNT]
+
+    cmp [word ptr es:OBJECT_OFF_REFCOUNT], 0
+    jne @@not_delete
+
+    push es
+    call heap_free
+
+@@not_delete:
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp object_deref
 
 object_ptr = bp + 4
 proc object_number_to_bool
@@ -2478,6 +2527,12 @@ proc expr_binary_eval
     mov es, ax
     mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
     mov [rhs_number], ax
+
+    ; Dereference the lhs and rhs of the expression
+    push [lhs_value]
+    call object_deref
+    push [rhs_value]
+    call object_deref
 
     ; Create a value
     push OBJECT_TYPE_NUMBER
@@ -2647,6 +2702,10 @@ proc instruction_show_execute
     call print_word
     call print_newline
 
+    ; Dereference the object
+    push es
+    call object_deref
+
     pop es
     pop ax
     pop bp
@@ -2654,9 +2713,11 @@ proc instruction_show_execute
 endp instruction_show_execute
 
 instrcution_ptr = bp + 4
+evaluated_object = bp - 2
 proc instruction_if_execute
     push bp
     mov bp, sp
+    sub sp, 2
     push ax
     push es
 
@@ -2666,9 +2727,15 @@ proc instruction_if_execute
     push [es:INSTRUCTION_IF_OFF_EXPR]
     call expr_eval
 
-    push ax
-    call object_to_bool
+    mov [word ptr evaluated_object], ax
 
+    push [evaluated_object]
+    call object_to_bool ; Returns to ax
+
+    push [evaluated_object]
+    call object_deref
+
+    ; Check the boolean result
     test ax, ax
     jz @@if_expr_failed
 
@@ -2690,14 +2757,17 @@ proc instruction_if_execute
 
     pop es
     pop ax
+    add sp, 2
     pop bp
     ret 2
 endp instruction_if_execute
 
 instruction_ptr = bp + 4
+evaluated_object = bp - 2
 proc instruction_loop_execute
     push bp
     mov bp, sp
+    sub sp, 2
     push ax
     push es
 
@@ -2708,9 +2778,15 @@ proc instruction_loop_execute
     push [es:INSTRUCTION_LOOP_OFF_EXPR]
     call expr_eval
 
-    push ax
-    call object_to_bool
+    mov [word ptr evaluated_object], ax
 
+    push [evaluated_object]
+    call object_to_bool ; Returns into ax
+
+    push [evaluated_object]
+    call object_deref
+
+    ; Check if condition value was truthy
     test ax, ax
     jz @@loop_condition_failed
 
@@ -2724,6 +2800,7 @@ proc instruction_loop_execute
 
     pop es
     pop ax
+    add sp, 2
     pop bp
     ret 2
 endp instruction_loop_execute
@@ -2890,7 +2967,20 @@ proc interpreter_set_variable
     push [bx + 0]
     call cstrs_eq
     test ax, ax
-    jnz @@set_variable
+    jz @@try_again
+
+    ; Deref the old value
+    push [bx + 2]
+    call object_deref
+
+    ; Set the new value
+    mov ax, [key]
+    mov [bx + 0], ax
+    mov ax, [value]
+    mov [bx + 2], ax
+    jmp @@variable_was_set
+
+@@try_again:
 
     inc cx
     add bx, 4
@@ -2898,15 +2988,12 @@ proc interpreter_set_variable
 
 @@add_new_variable:
     inc [word ptr amount_variables]
-
-@@set_variable:
-    ; Bx stores the next index
     mov ax, [key]
     mov [bx + 0], ax
     mov ax, [value]
     mov [bx + 2], ax
 
-variable_was_set:
+@@variable_was_set:
 
     pop cx
     pop bx
@@ -2940,6 +3027,9 @@ proc interpreter_get_variable
 
 @@found_variable:
     mov ax, [bx + 2]
+    ; Add reference
+    push ax
+    call object_ref
     jmp @@end_find_variable
 
 @@not_found_variable:

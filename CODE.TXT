@@ -1,6 +1,6 @@
 a = 1
 b = 1
-n = 10
+n = 30
 loop n {
     show a
     c = a + b
