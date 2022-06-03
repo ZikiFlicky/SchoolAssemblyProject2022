@@ -2922,7 +2922,6 @@ end_instruction_choice:
     ret 2
 endp instruction_execute
 
-; FIXME: Implement
 block_ptr = bp + 4
 proc block_delete
     push bp
@@ -2948,6 +2947,8 @@ proc block_delete
     jmp @@remove_instruction
 
 @@end_remove_block:
+    push es
+    call heap_free
 
     pop es
     pop bx
