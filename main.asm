@@ -2841,9 +2841,18 @@ proc operator_div_func
 
     ; TODO: DIV by 0 error
 
-    xor dx, dx
     mov ax, [lhs]
     mov bx, [rhs]
+
+    cmp [word ptr lhs], 0
+    jl @@prepare_negative
+    mov dx, 0
+    jmp @@do_div
+
+@@prepare_negative:
+    mov dx, -1
+
+@@do_div:
     idiv bx
 
     pop dx
@@ -2862,9 +2871,18 @@ proc operator_mod_func
 
     ; TODO: DIV by 0 error
 
-    xor dx, dx
     mov ax, [lhs]
     mov bx, [rhs]
+
+    cmp [word ptr lhs], 0
+    jl @@prepare_negative
+    mov dx, 0
+    jmp @@do_div
+
+@@prepare_negative:
+    mov dx, -1
+
+@@do_div:
     idiv bx
 
     ; Return the remainder
