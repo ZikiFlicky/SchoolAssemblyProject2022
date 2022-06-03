@@ -25,6 +25,8 @@ DATASEG
     TOKEN_TYPE_GREATER_EQU = 20
     TOKEN_TYPE_LESS_THAN = 21
     TOKEN_TYPE_GREATER_THAN = 22
+    TOKEN_TYPE_AMPERSAND_AMPERSAND = 23
+    TOKEN_TYPE_PIPE_PIPE = 24
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -47,6 +49,8 @@ DATASEG
     EXPR_TYPE_CMP_BIGGER = 11
     EXPR_TYPE_CMP_SMALLER_EQUALS = 12
     EXPR_TYPE_CMP_BIGGER_EQUALS = 13
+    EXPR_TYPE_AND = 14
+    EXPR_TYPE_OR = 15
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
@@ -131,7 +135,9 @@ DATASEG
     double_byte_tokens db TOKEN_TYPE_EQU_EQU, "=="
                        db TOKEN_TYPE_LESS_EQU, "<="
                        db TOKEN_TYPE_GREATER_EQU, ">="
-    AMOUNT_DOUBLE_BYTE_TOKENS = 3
+                       db TOKEN_TYPE_AMPERSAND_AMPERSAND, "&&"
+                       db TOKEN_TYPE_PIPE_PIPE, "||"
+    AMOUNT_DOUBLE_BYTE_TOKENS = 5
 
     ; Error related stuff
     file_error_line_message db " [line $"
@@ -1662,6 +1668,10 @@ proc expr_delete
     je @@choice_binary
     cmp al, EXPR_TYPE_MOD
     je @@choice_binary
+    cmp al, EXPR_TYPE_AND
+    je @@choice_binary
+    cmp al, EXPR_TYPE_OR
+    je @@choice_binary
     cmp al, EXPR_TYPE_CMP_EQUALS
     je @@choice_binary
     cmp al, EXPR_TYPE_CMP_SMALLER
@@ -2308,9 +2318,131 @@ proc parser_parse_expr_cmp
     ret
 endp parser_parse_expr_cmp
 
+left_ptr = bp - 2
+right_ptr = bp - 4
+new_expr_type = bp - 6
+proc parser_parse_expr_and
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    call parser_parse_expr_cmp
+    mov [left_ptr], ax
+    test ax, ax
+    jnz @@parse_expr_loop
+
+    jmp @@parse_expr_failed
+
+@@parse_expr_loop:
+    mov [word ptr new_expr_type], EXPR_TYPE_AND
+    push TOKEN_TYPE_AMPERSAND_AMPERSAND
+    call parser_match
+    test ax, ax
+    jnz @@matched
+
+    mov ax, [left_ptr]
+    jmp @@parse_expr_finish
+
+@@matched:
+    ; Try to parse the expr after the operator
+    call parser_parse_expr_cmp
+    test ax, ax
+    jz @@error_expected_expr
+    mov [right_ptr], ax
+
+    ; Create a new expr and put the information into it
+    push [new_expr_type]
+    call expr_new
+    mov es, ax
+    mov ax, [left_ptr]
+    mov [es:EXPR_BINARY_OFF_LHS], ax
+    mov ax, [right_ptr]
+    mov [es:EXPR_BINARY_OFF_RHS], ax
+    mov [left_ptr], es
+
+    jmp @@parse_expr_loop
+
+@@error_expected_expr:
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@parse_expr_failed:
+    mov ax, 0
+
+@@parse_expr_finish:
+
+    pop es
+    add sp, 6
+    pop bp
+    ret
+endp parser_parse_expr_and
+
+left_ptr = bp - 2
+right_ptr = bp - 4
+new_expr_type = bp - 6
+proc parser_parse_expr_or
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    call parser_parse_expr_and
+    mov [left_ptr], ax
+    test ax, ax
+    jnz @@parse_expr_loop
+
+    jmp @@parse_expr_failed
+
+@@parse_expr_loop:
+    mov [word ptr new_expr_type], EXPR_TYPE_OR
+    push TOKEN_TYPE_PIPE_PIPE
+    call parser_match
+    test ax, ax
+    jnz @@matched
+
+    mov ax, [left_ptr]
+    jmp @@parse_expr_finish
+
+@@matched:
+    ; Try to parse the expr after the operator
+    call parser_parse_expr_and
+    test ax, ax
+    jz @@error_expected_expr
+    mov [right_ptr], ax
+
+    ; Create a new expr and put the information into it
+    push [new_expr_type]
+    call expr_new
+    mov es, ax
+    mov ax, [left_ptr]
+    mov [es:EXPR_BINARY_OFF_LHS], ax
+    mov ax, [right_ptr]
+    mov [es:EXPR_BINARY_OFF_RHS], ax
+    mov [left_ptr], es
+
+    jmp @@parse_expr_loop
+
+@@error_expected_expr:
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@parse_expr_failed:
+    mov ax, 0
+
+@@parse_expr_finish:
+
+    pop es
+    add sp, 6
+    pop bp
+    ret
+endp parser_parse_expr_or
+
 ; The upmost expression parser
 proc parser_parse_expr
-    call parser_parse_expr_cmp
+    call parser_parse_expr_or
     ret
 endp parser_parse_expr
 
@@ -3410,6 +3542,131 @@ proc expr_cmp_bigger_equals_eval
 endp expr_cmp_bigger_equals_eval
 
 expr_ptr = bp + 4
+lhs_ptr = bp - 2
+rhs_ptr = bp - 4
+boolean_value = bp - 6
+proc expr_and_eval
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    mov [word ptr boolean_value], 0
+
+    push [es:EXPR_BINARY_OFF_LHS]
+    call expr_eval
+    mov [lhs_ptr], ax
+
+    push ax
+    call object_to_bool
+    test ax, ax
+    jz @@left_failed
+
+    push [es:EXPR_BINARY_OFF_RHS]
+    call expr_eval
+    mov [rhs_ptr], ax
+
+    push ax
+    call object_to_bool
+    test ax, ax
+    jz @@right_failed
+
+    mov [word ptr boolean_value], 1
+
+@@right_failed:
+    push [rhs_ptr]
+    call object_deref
+
+@@left_failed:
+    push [lhs_ptr]
+    call object_deref
+
+    ; Create a boolean-like number
+    push OBJECT_TYPE_NUMBER
+    call object_new
+    mov es, ax
+
+    mov ax, [boolean_value]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; To return the new object
+    mov ax, es
+
+    pop es
+    add sp, 6
+    pop bp
+    ret 2
+endp expr_and_eval
+
+expr_ptr = bp + 4
+lhs_ptr = bp - 2
+rhs_ptr = bp - 4
+boolean_value = bp - 6
+proc expr_or_eval
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    mov [word ptr boolean_value], 1
+
+    push [es:EXPR_BINARY_OFF_LHS]
+    call expr_eval
+    mov [lhs_ptr], ax
+
+    push ax
+    call object_to_bool
+    test ax, ax
+    jnz @@left_success
+
+    push [es:EXPR_BINARY_OFF_RHS]
+    call expr_eval
+    mov [rhs_ptr], ax
+
+    push ax
+    call object_to_bool
+    test ax, ax
+    jnz @@right_success
+
+    push [lhs_ptr]
+    call object_deref
+    push [rhs_ptr]
+    call object_deref
+
+    mov [word ptr boolean_value], 0
+
+@@right_success:
+    push [rhs_ptr]
+    call object_deref
+
+@@left_success:
+    push [lhs_ptr]
+    call object_deref
+
+    ; Create a boolean-like number
+    push OBJECT_TYPE_NUMBER
+    call object_new
+    mov es, ax
+
+    mov ax, [boolean_value]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; To return the new object
+    mov ax, es
+
+    pop es
+    add sp, 6
+    pop bp
+    ret 2
+endp expr_or_eval
+
+expr_ptr = bp + 4
 proc expr_eval
     push bp
     mov bp, sp
@@ -3446,75 +3703,77 @@ proc expr_eval
     je choice_eval_cmp_smaller_equals
     cmp al, EXPR_TYPE_CMP_BIGGER_EQUALS
     je choice_eval_cmp_bigger_equals
+    cmp al, EXPR_TYPE_AND
+    je choice_eval_and
+    cmp al, EXPR_TYPE_OR
+    je choice_eval_or
 
-    ; If we got here, our type code is invalid
+    ; If we got here, our type is invalid
     call panic
 
 choice_eval_number:
-    push [expr_ptr]
-    call expr_number_eval
+    mov ax, offset expr_number_eval
     jmp end_choice_eval
 
 choice_eval_var:
-    push [expr_ptr]
-    call expr_var_eval
+    mov ax, offset expr_var_eval
     jmp end_choice_eval
 
 choice_eval_add:
-    push [expr_ptr]
-    call expr_add_eval
+    mov ax, offset expr_add_eval
     jmp end_choice_eval
 
 choice_eval_sub:
-    push [expr_ptr]
-    call expr_sub_eval
+    mov ax, offset expr_sub_eval
     jmp end_choice_eval
 
 choice_eval_mul:
-    push [expr_ptr]
-    call expr_mul_eval
+    mov ax, offset expr_mul_eval
     jmp end_choice_eval
 
 choice_eval_div:
-    push [expr_ptr]
-    call expr_div_eval
+    mov ax, offset expr_div_eval
     jmp end_choice_eval
 
 choice_eval_mod:
-    push [expr_ptr]
-    call expr_mod_eval
+    mov ax, offset expr_mod_eval
     jmp end_choice_eval
 
 choice_eval_neg:
-    push [expr_ptr]
-    call expr_neg_eval
+    mov ax, offset expr_neg_eval
     jmp end_choice_eval
 
 choice_eval_cmp_equals:
-    push [expr_ptr]
-    call expr_cmp_equals_eval
+    mov ax, offset expr_cmp_equals_eval
     jmp end_choice_eval
 
 choice_eval_cmp_smaller:
-    push [expr_ptr]
-    call expr_cmp_smaller_eval
+    mov ax, offset expr_cmp_smaller_eval
     jmp end_choice_eval
 
 choice_eval_cmp_bigger:
-    push [expr_ptr]
-    call expr_cmp_bigger_eval
+    mov ax, offset expr_cmp_bigger_eval
     jmp end_choice_eval
 
 choice_eval_cmp_smaller_equals:
-    push [expr_ptr]
-    call expr_cmp_smaller_equals_eval
+    mov ax, offset expr_cmp_smaller_equals_eval
     jmp end_choice_eval
 
 choice_eval_cmp_bigger_equals:
-    push [expr_ptr]
-    call expr_cmp_bigger_equals_eval
+    mov ax, offset expr_cmp_bigger_equals_eval
+    jmp end_choice_eval
+
+choice_eval_and:
+    mov ax, offset expr_and_eval
+    jmp end_choice_eval
+
+choice_eval_or:
+    mov ax, offset expr_or_eval
 
 end_choice_eval:
+
+    push [expr_ptr]
+    call ax
 
     pop es
     pop bp
