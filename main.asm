@@ -7,14 +7,17 @@ DATASEG
     TOKEN_TYPE_EQU = 2
     TOKEN_TYPE_PLUS = 3
     TOKEN_TYPE_MINUS = 4
-    TOKEN_TYPE_NUMBER = 5
-    TOKEN_TYPE_NEWLINE = 6
-    TOKEN_TYPE_SHOW = 7
-    TOKEN_TYPE_IF = 8
-    TOKEN_TYPE_ELSE = 9
-    TOKEN_TYPE_LOOP = 10
-    TOKEN_TYPE_LEFT_BRACE = 11
-    TOKEN_TYPE_RIGHT_BRACE = 12
+    TOKEN_TYPE_STAR = 5
+    TOKEN_TYPE_SLASH = 6
+    TOKEN_TYPE_PERCENT = 7
+    TOKEN_TYPE_NUMBER = 8
+    TOKEN_TYPE_NEWLINE = 9
+    TOKEN_TYPE_SHOW = 10
+    TOKEN_TYPE_IF = 11
+    TOKEN_TYPE_ELSE = 12
+    TOKEN_TYPE_LOOP = 13
+    TOKEN_TYPE_LEFT_BRACE = 14
+    TOKEN_TYPE_RIGHT_BRACE = 15
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -28,6 +31,9 @@ DATASEG
     EXPR_TYPE_VAR = 2
     EXPR_TYPE_ADD = 3
     EXPR_TYPE_SUB = 4
+    EXPR_TYPE_MUL = 5
+    EXPR_TYPE_DIV = 6
+    EXPR_TYPE_MOD = 7
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
@@ -1420,66 +1426,95 @@ proc lex
     push [backtrack]
     call file_set_idx
     test ax, ax
-    jz lex_failed
+    jnz @@not_eof
+
+    jmp @@lex_failed
+
+@@not_eof:
 
     call lex_newline
     test ax, ax
-    jnz end_lex
+    jz @@not_newline
+
+    jmp @@end_lex
+
+@@not_newline:
 
     call lex_number
     test ax, ax
-    jnz end_lex
+    jnz @@end_lex
 
     call lex_keywords
     test ax, ax
-    jnz end_lex
+    jnz @@end_lex
 
     call lex_var
     test ax, ax
-    jnz end_lex
+    jnz @@end_lex
 
     mov ah, TOKEN_TYPE_EQU
     mov al, '='
     push ax
     call lex_char
     test ax, ax
-    jnz end_lex
+    jnz @@end_lex
 
     mov ah, TOKEN_TYPE_PLUS
     mov al, '+'
     push ax
     call lex_char
     test ax, ax
-    jnz end_lex
+    jnz @@end_lex
 
     mov ah, TOKEN_TYPE_MINUS
     mov al, '-'
     push ax
     call lex_char
     test ax, ax
-    jnz end_lex
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_STAR
+    mov al, '*'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_SLASH
+    mov al, '/'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_PERCENT
+    mov al, '%'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
 
     mov ah, TOKEN_TYPE_LEFT_BRACE
     mov al, '{'
     push ax
     call lex_char
     test ax, ax
-    jnz end_lex
+    jnz @@end_lex
 
     mov ah, TOKEN_TYPE_RIGHT_BRACE
     mov al, '}'
     push ax
     call lex_char
     test ax, ax
-    jnz end_lex
+    jnz @@end_lex
 
     push offset lexer_error_invalid_token
     call lexer_error
 
-lex_failed:
+@@lex_failed:
     mov ax, 0
 
-end_lex:
+@@end_lex:
     add sp, 2
     pop bp
     ret
@@ -1526,6 +1561,12 @@ proc expr_delete
     cmp al, EXPR_TYPE_ADD
     je @@choice_binary
     cmp al, EXPR_TYPE_SUB
+    je @@choice_binary
+    cmp al, EXPR_TYPE_MUL
+    je @@choice_binary
+    cmp al, EXPR_TYPE_DIV
+    je @@choice_binary
+    cmp al, EXPR_TYPE_MOD
     je @@choice_binary
 
     ; We don't need to remove anything
@@ -1843,42 +1884,44 @@ endp parser_parse_expr_single
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
-proc parser_parse_expr_sum
+proc parser_parse_expr_product
     push bp
     mov bp, sp
     sub sp, 6
     push es
 
     call parser_parse_expr_single
-    jz parse_expr_sum_failed
     mov [left_ptr], ax
+    test ax, ax
+    jnz @@parse_expr_loop
 
-parse_expr_sum_loop:
-    push TOKEN_TYPE_PLUS
+    jmp @@parse_expr_failed
+
+@@parse_expr_loop:
+    mov [word ptr new_expr_type], EXPR_TYPE_MUL
+    push TOKEN_TYPE_STAR
     call parser_match
     test ax, ax
-    jnz parse_expr_sum_matched_plus
-    push TOKEN_TYPE_MINUS
+    jnz @@matched
+    mov [word ptr new_expr_type], EXPR_TYPE_DIV
+    push TOKEN_TYPE_SLASH
     call parser_match
     test ax, ax
-    jnz parse_expr_sum_matched_minus
+    jnz @@matched
+    mov [word ptr new_expr_type], EXPR_TYPE_MOD
+    push TOKEN_TYPE_PERCENT
+    call parser_match
+    test ax, ax
+    jnz @@matched
 
     mov ax, [left_ptr]
-    jmp parse_expr_sum_finish
+    jmp @@parse_expr_finish
 
-parse_expr_sum_matched_plus:
-    mov [word ptr new_expr_type], EXPR_TYPE_ADD
-    jmp parse_expr_sum_end_operator_match
-
-parse_expr_sum_matched_minus:
-    mov [word ptr new_expr_type], EXPR_TYPE_SUB
-
-parse_expr_sum_end_operator_match:
-
+@@matched:
     ; Try to parse the expr after the operator
     call parser_parse_expr_single
     test ax, ax
-    jz parse_expr_sum_error_expected_expr
+    jz @@error_expected_expr
     mov [right_ptr], ax
 
     ; Create a new expr and put the information into it
@@ -1891,17 +1934,83 @@ parse_expr_sum_end_operator_match:
     mov [es:EXPR_BINARY_OFF_RHS], ax
     mov [left_ptr], es
 
-    jmp parse_expr_sum_loop
+    jmp @@parse_expr_loop
 
-parse_expr_sum_error_expected_expr:
+@@error_expected_expr:
     push [file_idx]
     push offset parser_error_syntax_error
     call parser_error
 
-parse_expr_sum_failed:
+@@parse_expr_failed:
     mov ax, 0
 
-parse_expr_sum_finish:
+@@parse_expr_finish:
+
+    pop es
+    add sp, 6
+    pop bp
+    ret
+endp parser_parse_expr_product
+
+left_ptr = bp - 2
+right_ptr = bp - 4
+new_expr_type = bp - 6
+proc parser_parse_expr_sum
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    call parser_parse_expr_product
+    mov [left_ptr], ax
+    test ax, ax
+    jnz @@parse_expr_loop
+
+    jmp @@parse_expr_failed
+
+@@parse_expr_loop:
+    mov [word ptr new_expr_type], EXPR_TYPE_ADD
+    push TOKEN_TYPE_PLUS
+    call parser_match
+    test ax, ax
+    jnz @@matched
+    mov [word ptr new_expr_type], EXPR_TYPE_SUB
+    push TOKEN_TYPE_MINUS
+    call parser_match
+    test ax, ax
+    jnz @@matched
+
+    mov ax, [left_ptr]
+    jmp @@parse_expr_finish
+
+@@matched:
+    ; Try to parse the expr after the operator
+    call parser_parse_expr_product
+    test ax, ax
+    jz @@error_expected_expr
+    mov [right_ptr], ax
+
+    ; Create a new expr and put the information into it
+    push [new_expr_type]
+    call expr_new
+    mov es, ax
+    mov ax, [left_ptr]
+    mov [es:EXPR_BINARY_OFF_LHS], ax
+    mov ax, [right_ptr]
+    mov [es:EXPR_BINARY_OFF_RHS], ax
+    mov [left_ptr], es
+
+    jmp @@parse_expr_loop
+
+@@error_expected_expr:
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@parse_expr_failed:
+    mov ax, 0
+
+@@parse_expr_finish:
 
     pop es
     add sp, 6
@@ -2645,6 +2754,72 @@ proc operator_sub_func
     ret 4
 endp operator_sub_func
 
+lhs = bp + 4
+rhs = bp + 6
+proc operator_mul_func
+    push bp
+    mov bp, sp
+    push bx
+    push dx
+
+    ; TODO: Error here if we get back something to dx (overflow the number)
+
+    xor dx, dx
+    mov ax, [lhs]
+    mov bx, [rhs]
+    imul bx
+
+    pop dx
+    pop bx
+    pop bp
+    ret 4
+endp operator_mul_func
+
+lhs = bp + 4
+rhs = bp + 6
+proc operator_div_func
+    push bp
+    mov bp, sp
+    push bx
+    push dx
+
+    ; TODO: DIV by 0 error
+
+    xor dx, dx
+    mov ax, [lhs]
+    mov bx, [rhs]
+    idiv bx
+
+    pop dx
+    pop bx
+    pop bp
+    ret 4
+endp operator_div_func
+
+lhs = bp + 4
+rhs = bp + 6
+proc operator_mod_func
+    push bp
+    mov bp, sp
+    push bx
+    push dx
+
+    ; TODO: DIV by 0 error
+
+    xor dx, dx
+    mov ax, [lhs]
+    mov bx, [rhs]
+    idiv bx
+
+    ; Return the remainder
+    mov ax, dx
+
+    pop dx
+    pop bx
+    pop bp
+    ret 4
+endp operator_mod_func
+
 expr_ptr = bp + 4
 proc expr_add_eval
     push bp
@@ -2672,6 +2847,45 @@ proc expr_sub_eval
 endp expr_sub_eval
 
 expr_ptr = bp + 4
+proc expr_mul_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_mul_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_mul_eval
+
+expr_ptr = bp + 4
+proc expr_div_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_div_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_div_eval
+
+expr_ptr = bp + 4
+proc expr_mod_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_mod_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_mod_eval
+
+expr_ptr = bp + 4
 proc expr_eval
     push bp
     mov bp, sp
@@ -2690,6 +2904,12 @@ proc expr_eval
     je choice_eval_add
     cmp al, EXPR_TYPE_SUB
     je choice_eval_sub
+    cmp al, EXPR_TYPE_MUL
+    je choice_eval_mul
+    cmp al, EXPR_TYPE_DIV
+    je choice_eval_div
+    cmp al, EXPR_TYPE_MOD
+    je choice_eval_mod
 
     ; If we got here, our type code is invalid
     call panic
@@ -2712,6 +2932,21 @@ choice_eval_add:
 choice_eval_sub:
     push [expr_ptr]
     call expr_sub_eval
+    jmp end_choice_eval
+
+choice_eval_mul:
+    push [expr_ptr]
+    call expr_mul_eval
+    jmp end_choice_eval
+
+choice_eval_div:
+    push [expr_ptr]
+    call expr_div_eval
+    jmp end_choice_eval
+
+choice_eval_mod:
+    push [expr_ptr]
+    call expr_mod_eval
 
 end_choice_eval:
 
