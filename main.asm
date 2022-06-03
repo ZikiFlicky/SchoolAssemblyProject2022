@@ -34,6 +34,7 @@ DATASEG
     EXPR_TYPE_MUL = 5
     EXPR_TYPE_DIV = 6
     EXPR_TYPE_MOD = 7
+    EXPR_TYPE_NEG = 8
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
@@ -44,6 +45,8 @@ DATASEG
     EXPR_BINARY_OFF_RHS = 3
 
     EXPR_VAR_OFF_NAME = 1
+
+    EXPR_SINGLE_OFF_INNER = 1
 
     EXPR_MAX_SIZE = 5
 
@@ -1568,6 +1571,8 @@ proc expr_delete
     je @@choice_binary
     cmp al, EXPR_TYPE_MOD
     je @@choice_binary
+    cmp al, EXPR_TYPE_NEG
+    je @@choice_single
 
     ; We don't need to remove anything
     jmp @@choice_end
@@ -1581,6 +1586,11 @@ proc expr_delete
     push [es:EXPR_BINARY_OFF_LHS]
     call expr_delete
     push [es:EXPR_BINARY_OFF_RHS]
+    call expr_delete
+    jmp @@choice_end
+
+@@choice_single:
+    push [es:EXPR_SINGLE_OFF_INNER]
     call expr_delete
 
 @@choice_end:
@@ -1864,19 +1874,65 @@ end_parse_expr_var:
     ret
 endp parser_parse_expr_var
 
+inner_expr_ptr = bp - 2
+proc parser_parse_expr_neg
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    push TOKEN_TYPE_MINUS
+    call parser_match
+    test ax, ax
+    jnz @@matched_minus
+
+    mov ax, 0
+    jmp @@end_parse_neg
+
+@@matched_minus:
+    call parser_parse_expr_single
+    test ax, ax
+    jz @@error_expected_expr
+
+    ; If we got here we parsed an expression
+    mov [inner_expr_ptr], ax
+    push EXPR_TYPE_NEG
+    call expr_new
+    mov es, ax
+    mov ax, [inner_expr_ptr]
+    mov [es:EXPR_SINGLE_OFF_INNER], ax
+    mov ax, es
+    jmp @@end_parse_neg
+
+@@error_expected_expr:
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@end_parse_neg:
+
+    pop es
+    add sp, 2
+    pop bp
+    ret
+endp parser_parse_expr_neg
+
 ; Parse values/variables
 proc parser_parse_expr_single
+    call parser_parse_expr_neg
+    test ax, ax
+    jnz @@end_parse
     call parser_parse_expr_var
     test ax, ax
-    jnz found_single_expr
+    jnz @@end_parse
     call parser_parse_expr_number
     test ax, ax
-    jnz found_single_expr
+    jnz @@end_parse
 
     ; If we got here, nothing was parsed
     mov ax, 0
 
-found_single_expr:
+@@end_parse:
 
     ret
 endp parser_parse_expr_single
@@ -2886,6 +2942,46 @@ proc expr_mod_eval
 endp expr_mod_eval
 
 expr_ptr = bp + 4
+neg_number = bp - 2
+proc expr_neg_eval
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    ; FIXME: Verify it's a number
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    push [es:EXPR_SINGLE_OFF_INNER]
+    call expr_eval
+
+    mov es, ax
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    neg ax
+    mov [neg_number], ax
+
+    push es
+    call object_deref
+
+    push OBJECT_TYPE_NUMBER
+    call object_new
+
+    mov es, ax
+    mov ax, [neg_number]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; Return new number object
+    mov ax, es
+
+    pop es
+    add sp, 2
+    pop bp
+    ret 2
+endp expr_neg_eval
+
+expr_ptr = bp + 4
 proc expr_eval
     push bp
     mov bp, sp
@@ -2910,6 +3006,8 @@ proc expr_eval
     je choice_eval_div
     cmp al, EXPR_TYPE_MOD
     je choice_eval_mod
+    cmp al, EXPR_TYPE_NEG
+    je choice_eval_neg
 
     ; If we got here, our type code is invalid
     call panic
@@ -2947,6 +3045,11 @@ choice_eval_div:
 choice_eval_mod:
     push [expr_ptr]
     call expr_mod_eval
+    jmp end_choice_eval
+
+choice_eval_neg:
+    push [expr_ptr]
+    call expr_neg_eval
 
 end_choice_eval:
 
