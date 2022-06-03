@@ -439,16 +439,28 @@ message_ptr = bp + 6
 index = bp + 8
 line = bp - 2
 column = bp - 4
+backtrack = bp - 6
 proc show_file_error
     push bp
     mov bp, sp
-    sub sp, 4
+    sub sp, 6
     push ax
     push bx
     push cx
     push dx
 
-    ; TODO: remove_whitespace
+    ; Store backtrack
+    mov ax, [file_idx]
+    mov [backtrack], ax
+    ; Remove following whitespace and store the index after the whitespace
+    push [index]
+    call file_set_idx
+    call remove_whitespace
+    mov ax, [file_idx]
+    mov [index], ax
+    ; Go back to original position
+    push [backtrack]
+    call file_set_idx
 
     mov ah, 09h
     mov dx, [error_start_ptr]
@@ -501,7 +513,7 @@ proc show_file_error
     pop cx
     pop bx
     pop ax
-    add sp, 4
+    add sp, 6
     pop bp
     ret 6
 endp show_file_error
