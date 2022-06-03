@@ -18,6 +18,8 @@ DATASEG
     TOKEN_TYPE_LOOP = 13
     TOKEN_TYPE_LEFT_BRACE = 14
     TOKEN_TYPE_RIGHT_BRACE = 15
+    TOKEN_TYPE_LEFT_PAREN = 16
+    TOKEN_TYPE_RIGHT_PAREN = 17
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -1310,6 +1312,85 @@ lex_char_end:
     ret 2
 endp lex_char
 
+; TODO: Store the token definitions in the data segment
+proc lex_single_byte_tokens
+    mov ah, TOKEN_TYPE_EQU
+    mov al, '='
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_PLUS
+    mov al, '+'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_MINUS
+    mov al, '-'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_STAR
+    mov al, '*'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_SLASH
+    mov al, '/'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_PERCENT
+    mov al, '%'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_LEFT_BRACE
+    mov al, '{'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_RIGHT_BRACE
+    mov al, '}'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_LEFT_PAREN
+    mov al, '('
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ah, TOKEN_TYPE_RIGHT_PAREN
+    mov al, ')'
+    push ax
+    call lex_char
+    test ax, ax
+    jnz @@end_lex
+
+    mov ax, 0
+
+@@end_lex: ; If we got here via a jump, we will return a `true`
+
+    ret
+endp lex_single_byte_tokens
+
 message_ptr = bp + 4
 index = bp + 6
 proc lexer_error
@@ -1437,11 +1518,7 @@ proc lex
 
     call lex_newline
     test ax, ax
-    jz @@not_newline
-
-    jmp @@end_lex
-
-@@not_newline:
+    jnz @@end_lex
 
     call lex_number
     test ax, ax
@@ -1455,59 +1532,7 @@ proc lex
     test ax, ax
     jnz @@end_lex
 
-    mov ah, TOKEN_TYPE_EQU
-    mov al, '='
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_PLUS
-    mov al, '+'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_MINUS
-    mov al, '-'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_STAR
-    mov al, '*'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_SLASH
-    mov al, '/'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_PERCENT
-    mov al, '%'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_LEFT_BRACE
-    mov al, '{'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_RIGHT_BRACE
-    mov al, '}'
-    push ax
-    call lex_char
+    call lex_single_byte_tokens
     test ax, ax
     jnz @@end_lex
 
@@ -1800,6 +1825,94 @@ proc parser_expect_newline
     ret 2
 endp parser_expect_newline
 
+inner_expr_ptr = bp - 2
+proc parser_parse_expr_paren
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    push TOKEN_TYPE_LEFT_PAREN
+    call parser_match
+    test ax, ax
+    jnz @@matched_paren
+
+    mov ax, 0
+    jmp @@end_parse_paren
+
+@@matched_paren:
+    call parser_parse_expr
+    test ax, ax
+    jz @@error_expected_expr
+
+    ; If we got here we parsed an expression
+    mov [inner_expr_ptr], ax
+
+    push TOKEN_TYPE_RIGHT_PAREN
+    call parser_match
+    test ax, ax
+    jz @@error_expected_right_paren
+
+    mov ax, [inner_expr_ptr]
+    jmp @@end_parse_paren
+
+@@error_expected_expr:
+@@error_expected_right_paren:
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@end_parse_paren:
+
+    pop es
+    add sp, 2
+    pop bp
+    ret
+endp parser_parse_expr_paren
+
+inner_expr_ptr = bp - 2
+proc parser_parse_expr_neg
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    push TOKEN_TYPE_MINUS
+    call parser_match
+    test ax, ax
+    jnz @@matched_minus
+
+    mov ax, 0
+    jmp @@end_parse_neg
+
+@@matched_minus:
+    call parser_parse_expr_single
+    test ax, ax
+    jz @@error_expected_expr
+
+    ; If we got here we parsed an expression
+    mov [inner_expr_ptr], ax
+    push EXPR_TYPE_NEG
+    call expr_new
+    mov es, ax
+    mov ax, [inner_expr_ptr]
+    mov [es:EXPR_SINGLE_OFF_INNER], ax
+    mov ax, es
+    jmp @@end_parse_neg
+
+@@error_expected_expr:
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@end_parse_neg:
+
+    pop es
+    add sp, 2
+    pop bp
+    ret
+endp parser_parse_expr_neg
+
 number = bp - 2
 proc parser_parse_expr_number
     push bp
@@ -1874,51 +1987,11 @@ end_parse_expr_var:
     ret
 endp parser_parse_expr_var
 
-inner_expr_ptr = bp - 2
-proc parser_parse_expr_neg
-    push bp
-    mov bp, sp
-    sub sp, 2
-    push es
-
-    push TOKEN_TYPE_MINUS
-    call parser_match
-    test ax, ax
-    jnz @@matched_minus
-
-    mov ax, 0
-    jmp @@end_parse_neg
-
-@@matched_minus:
-    call parser_parse_expr_single
-    test ax, ax
-    jz @@error_expected_expr
-
-    ; If we got here we parsed an expression
-    mov [inner_expr_ptr], ax
-    push EXPR_TYPE_NEG
-    call expr_new
-    mov es, ax
-    mov ax, [inner_expr_ptr]
-    mov [es:EXPR_SINGLE_OFF_INNER], ax
-    mov ax, es
-    jmp @@end_parse_neg
-
-@@error_expected_expr:
-    push [file_idx]
-    push offset parser_error_syntax_error
-    call parser_error
-
-@@end_parse_neg:
-
-    pop es
-    add sp, 2
-    pop bp
-    ret
-endp parser_parse_expr_neg
-
 ; Parse values/variables
 proc parser_parse_expr_single
+    call parser_parse_expr_paren
+    test ax, ax
+    jnz @@end_parse
     call parser_parse_expr_neg
     test ax, ax
     jnz @@end_parse
