@@ -1,6 +1,6 @@
 IDEAL
 MODEL small
-STACK 100h
+STACK 300h
 DATASEG
     ; Token types
     TOKEN_TYPE_VAR = 1
