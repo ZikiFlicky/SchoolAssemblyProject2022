@@ -1323,6 +1323,55 @@ proc lexer_error
     ret 2
 endp lexer_error
 
+; Returns into ax whether we found a comment
+backtrack = bp - 2
+proc remove_comment
+    push bp
+    mov bp, sp
+    sub sp, 2
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+    push 1
+    call read_bytes
+
+    cmp [byte ptr file_read_buffer + 0], '#'
+    je @@loop_comment
+
+    ; If we got here, we didn't find a comment
+    push [backtrack]
+    call file_set_idx
+    mov ax, 0
+    jmp @@end_comment_remove
+
+@@loop_comment:
+    mov ax, [file_idx]
+    mov [backtrack], ax
+    ; If found newline, we can end the comment
+    call file_read_newline
+    test ax, ax
+    jnz @@end_comment
+    push 1
+    ; If we got to the end of the file, we can end the comment, otherwise do nothing
+    call read_bytes
+    test ax, ax
+    jz @@end_comment
+
+    jmp @@loop_comment
+
+@@end_comment:
+    ; To un-advance the newline
+    push [backtrack]
+    call file_set_idx
+    mov ax, 1
+
+@@end_comment_remove:
+
+    add sp, 2
+    pop bp
+    ret
+endp remove_comment
+
 backtrack = bp - 2
 proc remove_whitespace
     push bp
@@ -1333,6 +1382,9 @@ proc remove_whitespace
 keep_removing:
     mov ax, [file_idx]
     mov [backtrack], ax
+    call remove_comment
+    test ax, ax
+    jnz keep_removing
     push 1
     call read_bytes
     test ax, ax
