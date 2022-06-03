@@ -102,8 +102,10 @@ DATASEG
 
     OBJECT_MAX_SIZE = 5
 
+    ; Misc
+    PSP_segment dw ?
+
     ; File related
-    filename db "CODE.TXT", 0
     file dw ?
     file_idx dw 0
     file_read_buffer db 100h dup(?)
@@ -167,6 +169,8 @@ DATASEG
     ; Interpreter error stuff
     runtime_error_start db "RuntimeError: $"
     runtime_error_variable_not_found db "Variable not found$"
+    runtime_error_not_enough_arguments db "Not enough arguments$"
+    runtime_error_could_not_open_file db "Could not open file$"
 
     ; TODO: Make this a hashmap?
     ; FIXME: Allows up to 16 variables
@@ -617,15 +621,51 @@ endp print_line_from_index
 proc open_file
     push ax
     push dx
+    push es
 
+    mov ax, [PSP_segment]
+    mov es, ax
+    ; Check if there is any argument
+    cmp [byte ptr es:80h], 0
+    jne @@has_filename
+
+    ; If we got here, there are not enough arguments
+    push offset runtime_error_not_enough_arguments
+    call interpreter_runtime_error
+
+@@has_filename:
+
+    mov bx, 82h ; because 81h is where it starts but it starts with a line-feed
+@@find_filename_end:
+    cmp [byte ptr es:bx], 0Dh
+    je @@found_filename_end
+
+    inc bx
+    jmp @@find_filename_end
+
+@@found_filename_end:
+    mov [byte ptr es:bx], 0 ; NUL-terminate the argument
+
+    push ds
+    mov ax, es
+    mov ds, ax
     mov ah, 3Dh
     mov al, 0 ; readonly
-    lea dx, [word ptr filename]
+    mov dx, 82h
     int 21h
+    pop ds
 
-    ; TODO: check errors
+    jnc @@file_open_succeeded
+
+    ; If we couldn't open the file
+    push offset runtime_error_could_not_open_file
+    call interpreter_runtime_error
+
+@@file_open_succeeded:
+
     mov [file], ax
 
+    pop es
     pop dx
     pop ax
     ret
@@ -4274,6 +4314,10 @@ endp interpreter_runtime_error
 start:
     mov ax, @data
     mov ds, ax
+
+    ; Store the PSP segment for use when opening the file
+    mov ax, es
+    mov [PSP_segment], ax
 
     call open_file
 
