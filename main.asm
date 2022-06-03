@@ -27,6 +27,7 @@ DATASEG
     TOKEN_TYPE_GREATER_THAN = 22
     TOKEN_TYPE_AMPERSAND_AMPERSAND = 23
     TOKEN_TYPE_PIPE_PIPE = 24
+    TOKEN_TYPE_EXCLAMATION_MARK = 25
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -51,6 +52,7 @@ DATASEG
     EXPR_TYPE_CMP_BIGGER_EQUALS = 13
     EXPR_TYPE_AND = 14
     EXPR_TYPE_OR = 15
+    EXPR_TYPE_NOT = 16
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
@@ -130,7 +132,8 @@ DATASEG
                        db TOKEN_TYPE_RIGHT_PAREN, ')'
                        db TOKEN_TYPE_LESS_THAN, '<'
                        db TOKEN_TYPE_GREATER_THAN, '>'
-    AMOUNT_SINGLE_BYTE_TOKENS = 12
+                       db TOKEN_TYPE_EXCLAMATION_MARK, '!'
+    AMOUNT_SINGLE_BYTE_TOKENS = 13
 
     double_byte_tokens db TOKEN_TYPE_EQU_EQU, "=="
                        db TOKEN_TYPE_LESS_EQU, "<="
@@ -1956,48 +1959,64 @@ proc parser_parse_expr_paren
     ret
 endp parser_parse_expr_paren
 
+start_token_type = bp + 4
+expr_type = bp + 6
 inner_expr_ptr = bp - 2
-proc parser_parse_expr_neg
+proc parser_parse_expr_unary
     push bp
     mov bp, sp
     sub sp, 2
     push es
 
-    push TOKEN_TYPE_MINUS
+    push [start_token_type]
     call parser_match
     test ax, ax
-    jnz @@matched_minus
+    jnz @@matched_token
 
     mov ax, 0
-    jmp @@end_parse_neg
+    jmp @@end_parse
 
-@@matched_minus:
+@@matched_token:
     call parser_parse_expr_single
     test ax, ax
     jz @@error_expected_expr
 
     ; If we got here we parsed an expression
     mov [inner_expr_ptr], ax
-    push EXPR_TYPE_NEG
+    push [expr_type]
     call expr_new
     mov es, ax
     mov ax, [inner_expr_ptr]
     mov [es:EXPR_SINGLE_OFF_INNER], ax
     mov ax, es
-    jmp @@end_parse_neg
+    jmp @@end_parse
 
 @@error_expected_expr:
     push [file_idx]
     push offset parser_error_syntax_error
     call parser_error
 
-@@end_parse_neg:
+@@end_parse:
 
     pop es
     add sp, 2
     pop bp
+    ret 4
+endp parser_parse_expr_unary
+
+proc parser_parse_expr_neg
+    push EXPR_TYPE_NEG
+    push TOKEN_TYPE_MINUS
+    call parser_parse_expr_unary
     ret
 endp parser_parse_expr_neg
+
+proc parser_parse_expr_not
+    push EXPR_TYPE_NOT
+    push TOKEN_TYPE_EXCLAMATION_MARK
+    call parser_parse_expr_unary
+    ret
+endp parser_parse_expr_not
 
 number = bp - 2
 proc parser_parse_expr_number
@@ -2079,6 +2098,9 @@ proc parser_parse_expr_single
     test ax, ax
     jnz @@end_parse
     call parser_parse_expr_neg
+    test ax, ax
+    jnz @@end_parse
+    call parser_parse_expr_not
     test ax, ax
     jnz @@end_parse
     call parser_parse_expr_var
@@ -3667,6 +3689,51 @@ proc expr_or_eval
 endp expr_or_eval
 
 expr_ptr = bp + 4
+evaluated_object = bp - 2
+boolean_value = bp - 4
+proc expr_not_eval
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push es
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    mov [word ptr boolean_value], 1
+
+    push [es:EXPR_SINGLE_OFF_INNER]
+    call expr_eval
+    mov [evaluated_object], ax
+
+    push ax
+    call object_to_bool
+    test ax, ax
+    jz @@object_not_truthy
+
+    mov [word ptr boolean_value], 0
+
+@@object_not_truthy:
+    ; Remove inner object
+    push [evaluated_object]
+    call object_deref
+
+    push OBJECT_TYPE_NUMBER
+    call object_new
+    mov es, ax
+
+    mov ax, [boolean_value]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    mov ax, es
+
+    pop es
+    add sp, 4
+    pop bp
+    ret 2
+endp expr_not_eval
+
+expr_ptr = bp + 4
 proc expr_eval
     push bp
     mov bp, sp
@@ -3707,6 +3774,8 @@ proc expr_eval
     je choice_eval_and
     cmp al, EXPR_TYPE_OR
     je choice_eval_or
+    cmp al, EXPR_TYPE_NOT
+    je choice_eval_not
 
     ; If we got here, our type is invalid
     call panic
@@ -3769,6 +3838,10 @@ choice_eval_and:
 
 choice_eval_or:
     mov ax, offset expr_or_eval
+    jmp end_choice_eval
+
+choice_eval_not:
+    mov ax, offset expr_not_eval
 
 end_choice_eval:
 
