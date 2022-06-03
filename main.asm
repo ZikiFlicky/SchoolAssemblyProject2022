@@ -20,6 +20,11 @@ DATASEG
     TOKEN_TYPE_RIGHT_BRACE = 15
     TOKEN_TYPE_LEFT_PAREN = 16
     TOKEN_TYPE_RIGHT_PAREN = 17
+    TOKEN_TYPE_EQU_EQU = 18
+    TOKEN_TYPE_LESS_EQU = 19
+    TOKEN_TYPE_GREATER_EQU = 20
+    TOKEN_TYPE_LESS_THAN = 21
+    TOKEN_TYPE_GREATER_THAN = 22
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -37,6 +42,11 @@ DATASEG
     EXPR_TYPE_DIV = 6
     EXPR_TYPE_MOD = 7
     EXPR_TYPE_NEG = 8
+    EXPR_TYPE_CMP_EQUALS = 9
+    EXPR_TYPE_CMP_SMALLER = 10
+    EXPR_TYPE_CMP_BIGGER = 11
+    EXPR_TYPE_CMP_SMALLER_EQUALS = 12
+    EXPR_TYPE_CMP_BIGGER_EQUALS = 13
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
@@ -103,6 +113,25 @@ DATASEG
     keyword_loop db TOKEN_TYPE_LOOP, 4, "loop"
     keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop
     AMOUNT_KEYWORDS = 4
+
+    single_byte_tokens db TOKEN_TYPE_EQU, '='
+                       db TOKEN_TYPE_PLUS, '+'
+                       db TOKEN_TYPE_MINUS, '-'
+                       db TOKEN_TYPE_STAR, '*'
+                       db TOKEN_TYPE_SLASH, '/'
+                       db TOKEN_TYPE_PERCENT, '%'
+                       db TOKEN_TYPE_LEFT_BRACE, '{'
+                       db TOKEN_TYPE_RIGHT_BRACE, '}'
+                       db TOKEN_TYPE_LEFT_PAREN, '('
+                       db TOKEN_TYPE_RIGHT_PAREN, ')'
+                       db TOKEN_TYPE_LESS_THAN, '<'
+                       db TOKEN_TYPE_GREATER_THAN, '>'
+    AMOUNT_SINGLE_BYTE_TOKENS = 12
+
+    double_byte_tokens db TOKEN_TYPE_EQU_EQU, "=="
+                       db TOKEN_TYPE_LESS_EQU, "<="
+                       db TOKEN_TYPE_GREATER_EQU, ">="
+    AMOUNT_DOUBLE_BYTE_TOKENS = 3
 
     ; Error related stuff
     file_error_line_message db " [line $"
@@ -193,7 +222,7 @@ proc is_char_var
     push bp
     mov bp, sp
 
-    push [word ptr character]
+    push [character]
     call is_char_var_start
     test ax, ax
     jnz character_is_var_start
@@ -1312,82 +1341,115 @@ lex_char_end:
     ret 2
 endp lex_char
 
-; TODO: Store the token definitions in the data segment
-proc lex_single_byte_tokens
-    mov ah, TOKEN_TYPE_EQU
-    mov al, '='
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
+backtrack = bp - 2
+proc lex_double_byte_tokens
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push bx
+    push cx
 
-    mov ah, TOKEN_TYPE_PLUS
-    mov al, '+'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
+    mov ax, [file_idx]
+    mov [backtrack], ax
 
-    mov ah, TOKEN_TYPE_MINUS
-    mov al, '-'
-    push ax
-    call lex_char
+    push 2
+    call read_bytes
     test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_STAR
-    mov al, '*'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_SLASH
-    mov al, '/'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_PERCENT
-    mov al, '%'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_LEFT_BRACE
-    mov al, '{'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_RIGHT_BRACE
-    mov al, '}'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_LEFT_PAREN
-    mov al, '('
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
-
-    mov ah, TOKEN_TYPE_RIGHT_PAREN
-    mov al, ')'
-    push ax
-    call lex_char
-    test ax, ax
-    jnz @@end_lex
+    jz @@lex_failed
 
     mov ax, 0
+    mov bx, offset double_byte_tokens
+@@loop_tokens:
+    cmp ax, AMOUNT_DOUBLE_BYTE_TOKENS
+    je @@lex_failed
+    mov cl, [bx + 1]
+    cmp [byte ptr file_read_buffer + 0], cl
+    jne @@not_matched_definition
+    mov cl, [bx + 2]
+    cmp [byte ptr file_read_buffer + 1], cl
+    jne @@not_matched_definition
 
-@@end_lex: ; If we got here via a jump, we will return a `true`
+    ; If we got here, we matched the token
+    jmp @@matched
 
+@@not_matched_definition:
+
+    inc ax
+    add bx, 1 + 2
+    jmp @@loop_tokens
+
+@@matched:
+    mov al, [bx + 0] ; Get token type
+    mov [token_type], al
+    mov [token_length], 2
+    mov ax, [backtrack]
+    mov [token_start_idx], ax
+    mov ax, 1 ; Return true
+    jmp @@end_lex
+
+@@lex_failed:
+    push [backtrack]
+    call file_set_idx
+    mov ax, 0
+
+@@end_lex:
+
+    pop cx
+    pop bx
+    add sp, 2
+    pop bp
+    ret
+endp lex_double_byte_tokens
+
+backtrack = bp - 2
+proc lex_single_byte_tokens
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push bx
+    push cx
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    push 1
+    call read_bytes
+    test ax, ax
+    jz @@lex_failed
+
+    mov ax, 0
+    mov bx, offset single_byte_tokens
+@@loop_tokens:
+    cmp ax, AMOUNT_SINGLE_BYTE_TOKENS
+    je @@lex_failed
+    mov cl, [bx + 1]
+    cmp [byte ptr file_read_buffer + 0], cl
+    je @@matched
+
+    inc ax
+    add bx, 1 + 1
+    jmp @@loop_tokens
+
+@@matched:
+    mov al, [bx + 0] ; Get token type
+    mov [token_type], al
+    mov [token_length], 1
+    mov ax, [backtrack]
+    mov [token_start_idx], ax
+    mov ax, 1 ; Return true
+    jmp @@end_lex
+
+@@lex_failed:
+    push [backtrack]
+    call file_set_idx
+    mov ax, 0
+
+@@end_lex:
+
+    pop cx
+    pop bx
+    add sp, 2
+    pop bp
     ret
 endp lex_single_byte_tokens
 
@@ -1532,6 +1594,10 @@ proc lex
     test ax, ax
     jnz @@end_lex
 
+    call lex_double_byte_tokens
+    test ax, ax
+    jnz @@end_lex
+
     call lex_single_byte_tokens
     test ax, ax
     jnz @@end_lex
@@ -1595,6 +1661,16 @@ proc expr_delete
     cmp al, EXPR_TYPE_DIV
     je @@choice_binary
     cmp al, EXPR_TYPE_MOD
+    je @@choice_binary
+    cmp al, EXPR_TYPE_CMP_EQUALS
+    je @@choice_binary
+    cmp al, EXPR_TYPE_CMP_SMALLER
+    je @@choice_binary
+    cmp al, EXPR_TYPE_CMP_BIGGER
+    je @@choice_binary
+    cmp al, EXPR_TYPE_CMP_SMALLER_EQUALS
+    je @@choice_binary
+    cmp al, EXPR_TYPE_CMP_BIGGER_EQUALS
     je @@choice_binary
     cmp al, EXPR_TYPE_NEG
     je @@choice_single
@@ -2147,9 +2223,94 @@ proc parser_parse_expr_sum
     ret
 endp parser_parse_expr_sum
 
+left_ptr = bp - 2
+right_ptr = bp - 4
+new_expr_type = bp - 6
+proc parser_parse_expr_cmp
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    call parser_parse_expr_sum
+    mov [left_ptr], ax
+    test ax, ax
+    jnz @@parse_expr_loop
+
+    jmp @@parse_expr_failed
+
+@@parse_expr_loop:
+    mov [word ptr new_expr_type], EXPR_TYPE_CMP_EQUALS
+    push TOKEN_TYPE_EQU_EQU
+    call parser_match
+    test ax, ax
+    jnz @@matched
+
+    mov [word ptr new_expr_type], EXPR_TYPE_CMP_SMALLER
+    push TOKEN_TYPE_LESS_THAN
+    call parser_match
+    test ax, ax
+    jnz @@matched
+
+    mov [word ptr new_expr_type], EXPR_TYPE_CMP_BIGGER
+    push TOKEN_TYPE_GREATER_THAN
+    call parser_match
+    test ax, ax
+    jnz @@matched
+
+    mov [word ptr new_expr_type], EXPR_TYPE_CMP_SMALLER_EQUALS
+    push TOKEN_TYPE_LESS_EQU
+    call parser_match
+    test ax, ax
+    jnz @@matched
+
+    mov [word ptr new_expr_type], EXPR_TYPE_CMP_BIGGER_EQUALS
+    push TOKEN_TYPE_GREATER_EQU
+    call parser_match
+    test ax, ax
+    jnz @@matched
+
+    mov ax, [left_ptr]
+    jmp @@parse_expr_finish
+
+@@matched:
+    ; Try to parse the expr after the operator
+    call parser_parse_expr_sum
+    test ax, ax
+    jz @@error_expected_expr
+    mov [right_ptr], ax
+
+    ; Create a new expr and put the information into it
+    push [new_expr_type]
+    call expr_new
+    mov es, ax
+    mov ax, [left_ptr]
+    mov [es:EXPR_BINARY_OFF_LHS], ax
+    mov ax, [right_ptr]
+    mov [es:EXPR_BINARY_OFF_RHS], ax
+    mov [left_ptr], es
+
+    jmp @@parse_expr_loop
+
+@@error_expected_expr:
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@parse_expr_failed:
+    mov ax, 0
+
+@@parse_expr_finish:
+
+    pop es
+    add sp, 6
+    pop bp
+    ret
+endp parser_parse_expr_cmp
+
 ; The upmost expression parser
 proc parser_parse_expr
-    call parser_parse_expr_sum
+    call parser_parse_expr_cmp
     ret
 endp parser_parse_expr
 
@@ -2967,6 +3128,116 @@ proc operator_mod_func
     ret 4
 endp operator_mod_func
 
+lhs = bp + 4
+rhs = bp + 6
+proc operator_cmp_equals_func
+    push bp
+    mov bp, sp
+
+    mov ax, [lhs]
+    cmp ax, [rhs]
+    jne @@not_equal
+
+    mov ax, 1
+    jmp @@end_cmp
+
+@@not_equal:
+    mov ax, 0
+
+@@end_cmp:
+
+    pop bp
+    ret 4
+endp operator_cmp_equals_func
+
+lhs = bp + 4
+rhs = bp + 6
+proc operator_cmp_smaller_func
+    push bp
+    mov bp, sp
+
+    mov ax, [lhs]
+    cmp ax, [rhs]
+    jl @@smaller
+
+    mov ax, 0
+    jmp @@end_cmp
+
+@@smaller:
+    mov ax, 1
+
+@@end_cmp:
+
+    pop bp
+    ret 4
+endp operator_cmp_smaller_func
+
+lhs = bp + 4
+rhs = bp + 6
+proc operator_cmp_bigger_func
+    push bp
+    mov bp, sp
+
+    mov ax, [lhs]
+    cmp ax, [rhs]
+    jg @@bigger
+
+    mov ax, 0
+    jmp @@end_cmp
+
+@@bigger:
+    mov ax, 1
+
+@@end_cmp:
+
+    pop bp
+    ret 4
+endp operator_cmp_bigger_func
+
+lhs = bp + 4
+rhs = bp + 6
+proc operator_cmp_smaller_equals_func
+    push bp
+    mov bp, sp
+
+    mov ax, [lhs]
+    cmp ax, [rhs]
+    jle @@smaller_equals
+
+    mov ax, 0
+    jmp @@end_cmp
+
+@@smaller_equals:
+    mov ax, 1
+
+@@end_cmp:
+
+    pop bp
+    ret 4
+endp operator_cmp_smaller_equals_func
+
+lhs = bp + 4
+rhs = bp + 6
+proc operator_cmp_bigger_equals_func
+    push bp
+    mov bp, sp
+
+    mov ax, [lhs]
+    cmp ax, [rhs]
+    jge @@bigger_equals
+
+    mov ax, 0
+    jmp @@end_cmp
+
+@@bigger_equals:
+    mov ax, 1
+
+@@end_cmp:
+
+    pop bp
+    ret 4
+endp operator_cmp_bigger_equals_func
+
 expr_ptr = bp + 4
 proc expr_add_eval
     push bp
@@ -3073,6 +3344,72 @@ proc expr_neg_eval
 endp expr_neg_eval
 
 expr_ptr = bp + 4
+proc expr_cmp_equals_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_cmp_equals_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_cmp_equals_eval
+
+expr_ptr = bp + 4
+proc expr_cmp_smaller_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_cmp_smaller_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_cmp_smaller_eval
+
+expr_ptr = bp + 4
+proc expr_cmp_bigger_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_cmp_bigger_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_cmp_bigger_eval
+
+expr_ptr = bp + 4
+proc expr_cmp_smaller_equals_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_cmp_smaller_equals_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_cmp_smaller_equals_eval
+
+
+expr_ptr = bp + 4
+proc expr_cmp_bigger_equals_eval
+    push bp
+    mov bp, sp
+
+    push offset operator_cmp_bigger_equals_func
+    push [expr_ptr]
+    call expr_binary_eval
+
+    pop bp
+    ret 2
+endp expr_cmp_bigger_equals_eval
+
+expr_ptr = bp + 4
 proc expr_eval
     push bp
     mov bp, sp
@@ -3099,6 +3436,16 @@ proc expr_eval
     je choice_eval_mod
     cmp al, EXPR_TYPE_NEG
     je choice_eval_neg
+    cmp al, EXPR_TYPE_CMP_EQUALS
+    je choice_eval_cmp_equals
+    cmp al, EXPR_TYPE_CMP_SMALLER
+    je choice_eval_cmp_smaller
+    cmp al, EXPR_TYPE_CMP_BIGGER
+    je choice_eval_cmp_bigger
+    cmp al, EXPR_TYPE_CMP_SMALLER_EQUALS
+    je choice_eval_cmp_smaller_equals
+    cmp al, EXPR_TYPE_CMP_BIGGER_EQUALS
+    je choice_eval_cmp_bigger_equals
 
     ; If we got here, our type code is invalid
     call panic
@@ -3141,6 +3488,31 @@ choice_eval_mod:
 choice_eval_neg:
     push [expr_ptr]
     call expr_neg_eval
+    jmp end_choice_eval
+
+choice_eval_cmp_equals:
+    push [expr_ptr]
+    call expr_cmp_equals_eval
+    jmp end_choice_eval
+
+choice_eval_cmp_smaller:
+    push [expr_ptr]
+    call expr_cmp_smaller_eval
+    jmp end_choice_eval
+
+choice_eval_cmp_bigger:
+    push [expr_ptr]
+    call expr_cmp_bigger_eval
+    jmp end_choice_eval
+
+choice_eval_cmp_smaller_equals:
+    push [expr_ptr]
+    call expr_cmp_smaller_equals_eval
+    jmp end_choice_eval
+
+choice_eval_cmp_bigger_equals:
+    push [expr_ptr]
+    call expr_cmp_bigger_equals_eval
 
 end_choice_eval:
 
