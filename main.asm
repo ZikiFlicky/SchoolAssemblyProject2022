@@ -28,6 +28,7 @@ DATASEG
     TOKEN_TYPE_AMPERSAND_AMPERSAND = 23
     TOKEN_TYPE_PIPE_PIPE = 24
     TOKEN_TYPE_EXCLAMATION_MARK = 25
+    TOKEN_TYPE_STRING = 26
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -53,12 +54,16 @@ DATASEG
     EXPR_TYPE_AND = 14
     EXPR_TYPE_OR = 15
     EXPR_TYPE_NOT = 16
+    EXPR_TYPE_STRING = 17
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
     EXPR_OFF_FILE_INDEX = 1
 
     EXPR_NUMBER_OFF_NUMBER = 3
+
+    EXPR_STRING_OFF_SOURCE = 3
+    EXPR_STRING_OFF_LENGTH = 5
 
     EXPR_BINARY_OFF_LHS = 3
     EXPR_BINARY_OFF_RHS = 5
@@ -94,6 +99,7 @@ DATASEG
 
     ; Object types
     OBJECT_TYPE_NUMBER = 1
+    OBJECT_TYPE_STRING = 2
 
     ; Object offsets
     OBJECT_OFF_TYPE = 0
@@ -101,7 +107,10 @@ DATASEG
 
     OBJECT_NUMBER_OFF_NUMBER = 3
 
-    OBJECT_MAX_SIZE = 5
+    OBJECT_STRING_OFF_SOURCE = 3
+    OBJECT_STRING_OFF_LENGTH = 5
+
+    OBJECT_MAX_SIZE = 7
 
     ; Misc
     PSP_segment dw ?
@@ -160,6 +169,7 @@ DATASEG
     parser_error_invalid_token db "Invalid token$"
     parser_error_syntax_error db "Syntax error$"
     parser_error_expected_newline db "Expected newline$"
+    parser_error_unexpected_newline db "Unxpected newline$"
     parser_error_number_too_big db "Number too big$"
     ; Panic related stuff
     panic_message db "* PANIC *", 13, 10, "$"
@@ -1168,6 +1178,64 @@ end_number_lex:
     ret
 endp lex_number
 
+; Returns into ax a bool saying if we were able to lex the number
+backtrack = bp - 2
+proc lex_string
+    push bp
+    mov bp, sp
+    sub sp, 2
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    push 1
+    call read_bytes
+    test ax, ax
+    jz @@lex_failed
+    cmp [byte ptr file_read_buffer], '"'
+    jne @@lex_failed
+
+    ; If we got here, we can start lexing the string
+    mov [byte ptr token_type], TOKEN_TYPE_STRING
+    mov [word ptr token_length], 0
+    mov ax, [file_idx]
+    mov [word ptr token_start_idx], ax
+
+@@loop_string:
+    call file_read_newline
+    test ax, ax
+    jnz @@error_newline_reached
+    push 1
+    call read_bytes
+    test ax, ax
+    jz @@error_newline_reached
+    cmp [byte ptr file_read_buffer + 0], '"'
+    je @@end_loop_string
+
+    inc [word ptr token_length]
+    jmp @@loop_string
+
+@@end_loop_string:
+    mov ax, 1
+    jmp @@lex_end
+
+@@error_newline_reached:
+    push [backtrack]
+    push offset parser_error_unexpected_newline
+    call parser_error
+
+@@lex_failed:
+    push [backtrack]
+    call file_set_idx
+    mov ax, 0
+
+@@lex_end:
+
+    add sp, 2
+    pop bp
+    ret
+endp lex_string
+
 keyword_ptr = bp + 4
 backtrack = bp - 2
 keyword_length = bp - 4
@@ -1637,17 +1705,17 @@ proc lex
     push [backtrack]
     call file_set_idx
     test ax, ax
-    jnz @@not_eof
-
-    jmp @@lex_failed
-
-@@not_eof:
+    jz @@lex_failed
 
     call lex_newline
     test ax, ax
     jnz @@end_lex
 
     call lex_number
+    test ax, ax
+    jnz @@end_lex
+
+    call lex_string
     test ax, ax
     jnz @@end_lex
 
@@ -2125,6 +2193,51 @@ parse_expr_number_finish:
     ret
 endp parser_parse_expr_number
 
+string = bp - 2
+backtrack = bp - 4
+proc parser_parse_expr_string
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push es
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    ; Try to match a string token
+    push TOKEN_TYPE_STRING
+    call parser_match
+    test ax, ax
+    jz @@not_string
+
+    call token_to_cstr ; Moves the allocated string segment into ax
+    mov [string], ax
+
+    push [backtrack]
+    push EXPR_TYPE_STRING
+    call expr_new
+    mov es, ax
+
+    mov ax, [string]
+    mov [es:EXPR_STRING_OFF_SOURCE], ax
+    mov ax, [token_length]
+    mov [es:EXPR_STRING_OFF_LENGTH], ax
+
+    ; Move the address of the expr to ax so we can return it
+    mov ax, es
+    jmp @@parse_end
+
+@@not_string:
+    mov ax, 0
+
+@@parse_end:
+
+    pop es
+    add sp, 4
+    pop bp
+    ret
+endp parser_parse_expr_string
+
 var_name = bp - 2
 backtrack = bp - 4
 proc parser_parse_expr_var    
@@ -2177,10 +2290,13 @@ proc parser_parse_expr_single
     call parser_parse_expr_not
     test ax, ax
     jnz @@end_parse
-    call parser_parse_expr_var
+    call parser_parse_expr_number
     test ax, ax
     jnz @@end_parse
-    call parser_parse_expr_number
+    call parser_parse_expr_string
+    test ax, ax
+    jnz @@end_parse
+    call parser_parse_expr_var
     test ax, ax
     jnz @@end_parse
 
@@ -3087,6 +3203,18 @@ proc object_deref
     cmp [word ptr es:OBJECT_OFF_REFCOUNT], 0
     jne @@not_delete
 
+    mov al, [es:OBJECT_OFF_TYPE]
+    cmp al, OBJECT_TYPE_STRING
+    je @@choice_string
+
+    jmp @@end_delete
+
+@@choice_string:
+    push [es:OBJECT_STRING_OFF_SOURCE]
+    call heap_free
+
+@@end_delete:
+
     push es
     call heap_free
 
@@ -3890,6 +4018,45 @@ proc expr_not_eval
 endp expr_not_eval
 
 expr_ptr = bp + 4
+source = bp - 2
+string_length = bp - 4
+proc expr_string_eval
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push es
+
+    ; Store the expr segment
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    ; Store the string
+    mov ax, [es:EXPR_STRING_OFF_SOURCE]
+    mov [source], ax
+    mov ax, [es:EXPR_STRING_OFF_LENGTH]
+    mov [string_length], ax
+
+    ; Create a value
+    push OBJECT_TYPE_STRING
+    call object_new
+    mov es, ax
+
+    ; Set the value's string
+    mov ax, [source]
+    mov [es:OBJECT_STRING_OFF_SOURCE], ax
+    mov ax, [string_length]
+    mov [es:OBJECT_STRING_OFF_LENGTH], ax
+
+    ; Set ax to new value so we can return it
+    mov ax, es
+
+    pop es
+    add sp, 4
+    pop bp
+    ret 2
+endp expr_string_eval
+
+expr_ptr = bp + 4
 proc expr_eval
     push bp
     mov bp, sp
@@ -3932,6 +4099,8 @@ proc expr_eval
     je choice_eval_or
     cmp al, EXPR_TYPE_NOT
     je choice_eval_not
+    cmp al, EXPR_TYPE_STRING
+    je choice_eval_string
 
     ; If we got here, our type is invalid
     call panic
@@ -3998,6 +4167,10 @@ choice_eval_or:
 
 choice_eval_not:
     mov ax, offset expr_not_eval
+    jmp end_choice_eval
+
+choice_eval_string:
+    mov ax, offset expr_string_eval
 
 end_choice_eval:
 
@@ -4033,6 +4206,50 @@ proc instruction_assign_execute
     ret 2
 endp instruction_assign_execute
 
+object_ptr = bp + 4
+proc object_number_show
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+
+    push ax
+    call print_word
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp object_number_show
+
+object_ptr = bp + 4
+proc object_string_show
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_STRING_OFF_SOURCE]
+    push ds
+    mov ds, ax
+    push 0
+    call print_nul_terminated_string
+    pop ds
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp object_string_show
+
 instruction_ptr = bp + 4
 proc instruction_show_execute
     push bp
@@ -4048,11 +4265,29 @@ proc instruction_show_execute
     call expr_eval
     mov es, ax
 
-    ; FIXME: Verify this is a number
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov al, [es:OBJECT_OFF_TYPE]
 
-    push ax
-    call print_word
+    cmp al, OBJECT_TYPE_NUMBER
+    je @@choice_number
+    cmp al, OBJECT_TYPE_STRING
+    je @@choice_string
+
+    call panic
+
+@@choice_number:
+    mov ax, offset object_number_show
+    jmp @@end_show
+
+@@choice_string:
+    mov ax, offset object_string_show
+
+@@end_show:
+
+    ; Call the show function
+    push es
+    call ax
+
+    ; Show newline after the print
     call print_newline
 
     ; Dereference the object
