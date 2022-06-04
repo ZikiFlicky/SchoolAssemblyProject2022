@@ -56,17 +56,18 @@ DATASEG
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
+    EXPR_OFF_FILE_INDEX = 1
 
-    EXPR_NUMBER_OFF_NUMBER = 1
+    EXPR_NUMBER_OFF_NUMBER = 3
 
-    EXPR_BINARY_OFF_LHS = 1
-    EXPR_BINARY_OFF_RHS = 3
+    EXPR_BINARY_OFF_LHS = 3
+    EXPR_BINARY_OFF_RHS = 5
 
-    EXPR_VAR_OFF_NAME = 1
+    EXPR_VAR_OFF_NAME = 3
 
-    EXPR_SINGLE_OFF_INNER = 1
+    EXPR_SINGLE_OFF_INNER = 3
 
-    EXPR_MAX_SIZE = 5
+    EXPR_MAX_SIZE = 7
 
     ; Instruction types
     INSTRUCTION_TYPE_ASSIGN = 1
@@ -167,10 +168,13 @@ DATASEG
     amount_instructions dw 0
 
     ; Interpreter error stuff
-    runtime_error_start db "RuntimeError: $"
+    runtime_error_no_state_start db "RuntimeError: $"
+    runtime_error_start db "RuntimeError$"
     runtime_error_variable_not_found db "Variable not found$"
     runtime_error_not_enough_arguments db "Not enough arguments$"
     runtime_error_could_not_open_file db "Could not open file$"
+    runtime_error_div_by_zero db "Division by 0$"
+    runtime_error_mul_overflow db "Overflowed beyond 16-bit when multiplying$"
 
     ; TODO: Make this a hashmap?
     ; FIXME: Allows up to 16 variables
@@ -631,7 +635,7 @@ proc open_file
 
     ; If we got here, there are not enough arguments
     push offset runtime_error_not_enough_arguments
-    call interpreter_runtime_error
+    call interpreter_runtime_error_no_state
 
 @@has_filename:
 
@@ -659,7 +663,7 @@ proc open_file
 
     ; If we couldn't open the file
     push offset runtime_error_could_not_open_file
-    call interpreter_runtime_error
+    call interpreter_runtime_error_no_state
 
 @@file_open_succeeded:
 
@@ -730,23 +734,23 @@ proc read_bytes
     int 21h
 
     ; If had error
-    jc had_error
+    jc @@had_error
 
     ; if read less than wanted
     cmp ax, [amount_bytes]
-    jl had_error
+    jl @@had_error
 
     mov ax, [amount_bytes]
     add [file_idx], ax
 
     mov ax, 1
-    jmp no_error
+    jmp @@no_error
 
-had_error:
+@@had_error:
     push [backtrack]
     call file_set_idx
     mov ax, 0
-no_error:
+@@no_error:
 
     pop dx
     pop cx
@@ -1667,6 +1671,7 @@ endp lex
 
 ; Returns segment of new expr with the given type
 expr_type = bp + 4
+index = bp + 6
 proc expr_new
     push bp
     mov bp, sp
@@ -1679,12 +1684,14 @@ proc expr_new
     ; Add type
     mov ax, [expr_type]
     mov [es:EXPR_OFF_TYPE], al
+    mov ax, [index]
+    mov [es:EXPR_OFF_FILE_INDEX], ax
     ; Prepare for return
     mov ax, es
 
     pop es
     pop bp
-    ret 2
+    ret 4
 endp expr_new
 
 expr_ptr = bp + 4
@@ -2002,11 +2009,15 @@ endp parser_parse_expr_paren
 start_token_type = bp + 4
 expr_type = bp + 6
 inner_expr_ptr = bp - 2
+backtrack = bp - 4
 proc parser_parse_expr_unary
     push bp
     mov bp, sp
-    sub sp, 2
+    sub sp, 4
     push es
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
 
     push [start_token_type]
     call parser_match
@@ -2023,6 +2034,7 @@ proc parser_parse_expr_unary
 
     ; If we got here we parsed an expression
     mov [inner_expr_ptr], ax
+    push [backtrack]
     push [expr_type]
     call expr_new
     mov es, ax
@@ -2039,7 +2051,7 @@ proc parser_parse_expr_unary
 @@end_parse:
 
     pop es
-    add sp, 2
+    add sp, 4
     pop bp
     ret 4
 endp parser_parse_expr_unary
@@ -2059,11 +2071,15 @@ proc parser_parse_expr_not
 endp parser_parse_expr_not
 
 number = bp - 2
+backtrack = bp - 4
 proc parser_parse_expr_number
     push bp
     mov bp, sp
-    sub sp, 2
+    sub sp, 4
     push es
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
 
     ; Try to match a number token
     push TOKEN_TYPE_NUMBER
@@ -2074,6 +2090,7 @@ proc parser_parse_expr_number
     call token_to_number ; Moves the actual number into ax
     mov [number], ax
 
+    push [backtrack]
     push EXPR_TYPE_NUMBER
     call expr_new
     mov es, ax
@@ -2091,17 +2108,21 @@ parse_expr_number_failed:
 parse_expr_number_finish:
 
     pop es
-    add sp, 2
+    add sp, 4
     pop bp
     ret
 endp parser_parse_expr_number
 
 var_name = bp - 2
+backtrack = bp - 4
 proc parser_parse_expr_var    
     push bp
     mov bp, sp
-    sub sp, 2
+    sub sp, 4
     push es
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
 
     push TOKEN_TYPE_VAR
     call parser_match
@@ -2111,6 +2132,7 @@ proc parser_parse_expr_var
     call token_to_cstr
     mov [var_name], ax
 
+    push [backtrack]
     push EXPR_TYPE_VAR
     call expr_new
     mov es, ax
@@ -2127,7 +2149,7 @@ not_found_expr_var:
 end_parse_expr_var:
 
     pop es
-    add sp, 2
+    add sp, 4
     pop bp
     ret
 endp parser_parse_expr_var
@@ -2161,10 +2183,11 @@ endp parser_parse_expr_single
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
+backtrack = bp - 8
 proc parser_parse_expr_product
     push bp
     mov bp, sp
-    sub sp, 6
+    sub sp, 8
     push es
 
     call parser_parse_expr_single
@@ -2175,16 +2198,22 @@ proc parser_parse_expr_product
     jmp @@parse_expr_failed
 
 @@parse_expr_loop:
+    ; Store the index of the operator for the expr index
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
     mov [word ptr new_expr_type], EXPR_TYPE_MUL
     push TOKEN_TYPE_STAR
     call parser_match
     test ax, ax
     jnz @@matched
+
     mov [word ptr new_expr_type], EXPR_TYPE_DIV
     push TOKEN_TYPE_SLASH
     call parser_match
     test ax, ax
     jnz @@matched
+
     mov [word ptr new_expr_type], EXPR_TYPE_MOD
     push TOKEN_TYPE_PERCENT
     call parser_match
@@ -2202,6 +2231,7 @@ proc parser_parse_expr_product
     mov [right_ptr], ax
 
     ; Create a new expr and put the information into it
+    push [backtrack]
     push [new_expr_type]
     call expr_new
     mov es, ax
@@ -2224,7 +2254,7 @@ proc parser_parse_expr_product
 @@parse_expr_finish:
 
     pop es
-    add sp, 6
+    add sp, 8
     pop bp
     ret
 endp parser_parse_expr_product
@@ -2232,10 +2262,11 @@ endp parser_parse_expr_product
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
+backtrack = bp - 8
 proc parser_parse_expr_sum
     push bp
     mov bp, sp
-    sub sp, 6
+    sub sp, 8
     push es
 
     call parser_parse_expr_product
@@ -2246,6 +2277,10 @@ proc parser_parse_expr_sum
     jmp @@parse_expr_failed
 
 @@parse_expr_loop:
+    ; Store the index of the operator for the expr index
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
     mov [word ptr new_expr_type], EXPR_TYPE_ADD
     push TOKEN_TYPE_PLUS
     call parser_match
@@ -2268,6 +2303,7 @@ proc parser_parse_expr_sum
     mov [right_ptr], ax
 
     ; Create a new expr and put the information into it
+    push [backtrack]
     push [new_expr_type]
     call expr_new
     mov es, ax
@@ -2290,7 +2326,7 @@ proc parser_parse_expr_sum
 @@parse_expr_finish:
 
     pop es
-    add sp, 6
+    add sp, 8
     pop bp
     ret
 endp parser_parse_expr_sum
@@ -2298,10 +2334,11 @@ endp parser_parse_expr_sum
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
+backtrack = bp - 8
 proc parser_parse_expr_cmp
     push bp
     mov bp, sp
-    sub sp, 6
+    sub sp, 8
     push es
 
     call parser_parse_expr_sum
@@ -2312,6 +2349,10 @@ proc parser_parse_expr_cmp
     jmp @@parse_expr_failed
 
 @@parse_expr_loop:
+    ; Store the index of the operator for the expr index
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
     mov [word ptr new_expr_type], EXPR_TYPE_CMP_EQUALS
     push TOKEN_TYPE_EQU_EQU
     call parser_match
@@ -2353,6 +2394,7 @@ proc parser_parse_expr_cmp
     mov [right_ptr], ax
 
     ; Create a new expr and put the information into it
+    push [backtrack]
     push [new_expr_type]
     call expr_new
     mov es, ax
@@ -2375,7 +2417,7 @@ proc parser_parse_expr_cmp
 @@parse_expr_finish:
 
     pop es
-    add sp, 6
+    add sp, 8
     pop bp
     ret
 endp parser_parse_expr_cmp
@@ -2383,10 +2425,11 @@ endp parser_parse_expr_cmp
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
+backtrack = bp - 8
 proc parser_parse_expr_and
     push bp
     mov bp, sp
-    sub sp, 6
+    sub sp, 8
     push es
 
     call parser_parse_expr_cmp
@@ -2397,6 +2440,10 @@ proc parser_parse_expr_and
     jmp @@parse_expr_failed
 
 @@parse_expr_loop:
+    ; Store the index of the operator for the expr index
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
     mov [word ptr new_expr_type], EXPR_TYPE_AND
     push TOKEN_TYPE_AMPERSAND_AMPERSAND
     call parser_match
@@ -2414,6 +2461,7 @@ proc parser_parse_expr_and
     mov [right_ptr], ax
 
     ; Create a new expr and put the information into it
+    push [backtrack]
     push [new_expr_type]
     call expr_new
     mov es, ax
@@ -2436,7 +2484,7 @@ proc parser_parse_expr_and
 @@parse_expr_finish:
 
     pop es
-    add sp, 6
+    add sp, 8
     pop bp
     ret
 endp parser_parse_expr_and
@@ -2444,10 +2492,11 @@ endp parser_parse_expr_and
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
+backtrack = bp - 8
 proc parser_parse_expr_or
     push bp
     mov bp, sp
-    sub sp, 6
+    sub sp, 8
     push es
 
     call parser_parse_expr_and
@@ -2458,6 +2507,9 @@ proc parser_parse_expr_or
     jmp @@parse_expr_failed
 
 @@parse_expr_loop:
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
     mov [word ptr new_expr_type], EXPR_TYPE_OR
     push TOKEN_TYPE_PIPE_PIPE
     call parser_match
@@ -2475,6 +2527,7 @@ proc parser_parse_expr_or
     mov [right_ptr], ax
 
     ; Create a new expr and put the information into it
+    push [backtrack]
     push [new_expr_type]
     call expr_new
     mov es, ax
@@ -2497,7 +2550,7 @@ proc parser_parse_expr_or
 @@parse_expr_finish:
 
     pop es
-    add sp, 6
+    add sp, 8
     pop bp
     ret
 endp parser_parse_expr_or
@@ -3139,6 +3192,7 @@ proc expr_var_eval
     jnz found_variable
 
     ; If we got here, we didn't find a variable
+    push [es:EXPR_OFF_FILE_INDEX]
     push offset runtime_error_variable_not_found
     call interpreter_runtime_error
 
@@ -3197,6 +3251,7 @@ proc expr_binary_eval
     mov es, ax
 
     ; Set the value's number
+    push [expr_ptr]
     push [rhs_number]
     push [lhs_number]
     mov ax, [operator_func]
@@ -3214,6 +3269,7 @@ endp expr_binary_eval
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_add_func
     push bp
     mov bp, sp
@@ -3222,11 +3278,12 @@ proc operator_add_func
     add ax, [rhs]
 
     pop bp
-    ret 4
+    ret 6
 endp operator_add_func
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_sub_func
     push bp
     mov bp, sp
@@ -3235,40 +3292,68 @@ proc operator_sub_func
     sub ax, [rhs]
 
     pop bp
-    ret 4
+    ret 6
 endp operator_sub_func
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_mul_func
     push bp
     mov bp, sp
     push bx
     push dx
+    push es
 
-    ; TODO: Error here if we get back something to dx (overflow the number)
+    mov ax, [expr_ptr]
+    mov es, ax
 
     xor dx, dx
     mov ax, [lhs]
     mov bx, [rhs]
     imul bx
 
+    cmp dx, 0
+    je @@not_overflowed
+    cmp dx, -1
+    je @@not_overflowed
+
+    ; If we got here, we overflowed
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_mul_overflow
+    call interpreter_runtime_error
+
+@@not_overflowed:
+
+    pop es
     pop dx
     pop bx
     pop bp
-    ret 4
+    ret 6
 endp operator_mul_func
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_div_func
     push bp
     mov bp, sp
     push bx
     push dx
+    push es
 
-    ; TODO: DIV by 0 error
+    cmp [word ptr rhs], 0
+    jne @@not_div_by_zero
 
+    ; If we got here, we divide by 0
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_div_by_zero
+    call interpreter_runtime_error
+
+@@not_div_by_zero:
     mov ax, [lhs]
     mov bx, [rhs]
 
@@ -3283,22 +3368,35 @@ proc operator_div_func
 @@do_div:
     idiv bx
 
+    pop es
     pop dx
     pop bx
     pop bp
-    ret 4
+    ret 6
 endp operator_div_func
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_mod_func
     push bp
     mov bp, sp
     push bx
     push dx
+    push es
 
-    ; TODO: DIV by 0 error
+    cmp [word ptr rhs], 0
+    jne @@not_div_by_zero
 
+    ; If we got here, we divide by 0
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_div_by_zero
+    call interpreter_runtime_error
+
+@@not_div_by_zero:
     mov ax, [lhs]
     mov bx, [rhs]
 
@@ -3316,14 +3414,16 @@ proc operator_mod_func
     ; Return the remainder
     mov ax, dx
 
+    pop es
     pop dx
     pop bx
     pop bp
-    ret 4
+    ret 6
 endp operator_mod_func
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_cmp_equals_func
     push bp
     mov bp, sp
@@ -3341,11 +3441,12 @@ proc operator_cmp_equals_func
 @@end_cmp:
 
     pop bp
-    ret 4
+    ret 6
 endp operator_cmp_equals_func
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_cmp_smaller_func
     push bp
     mov bp, sp
@@ -3363,11 +3464,12 @@ proc operator_cmp_smaller_func
 @@end_cmp:
 
     pop bp
-    ret 4
+    ret 6
 endp operator_cmp_smaller_func
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_cmp_bigger_func
     push bp
     mov bp, sp
@@ -3385,11 +3487,12 @@ proc operator_cmp_bigger_func
 @@end_cmp:
 
     pop bp
-    ret 4
+    ret 6
 endp operator_cmp_bigger_func
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_cmp_smaller_equals_func
     push bp
     mov bp, sp
@@ -3407,11 +3510,12 @@ proc operator_cmp_smaller_equals_func
 @@end_cmp:
 
     pop bp
-    ret 4
+    ret 6
 endp operator_cmp_smaller_equals_func
 
 lhs = bp + 4
 rhs = bp + 6
+expr_ptr = bp + 8
 proc operator_cmp_bigger_equals_func
     push bp
     mov bp, sp
@@ -3429,7 +3533,7 @@ proc operator_cmp_bigger_equals_func
 @@end_cmp:
 
     pop bp
-    ret 4
+    ret 6
 endp operator_cmp_bigger_equals_func
 
 expr_ptr = bp + 4
@@ -4281,7 +4385,7 @@ proc interpreter_get_variable
 endp interpreter_get_variable
 
 message_ptr = bp + 4
-proc interpreter_runtime_error
+proc interpreter_runtime_error_no_state
     push bp
     mov bp, sp
     push ax
@@ -4291,7 +4395,7 @@ proc interpreter_runtime_error
 
     ; ParserError:
     mov ah, 09h
-    lea dx, [byte ptr runtime_error_start]
+    lea dx, [byte ptr runtime_error_no_state_start]
     int 21h
     ; Some error message
     mov ah, 09h
@@ -4309,6 +4413,27 @@ proc interpreter_runtime_error
     pop ax
     pop bp
     ret 2
+endp interpreter_runtime_error_no_state
+
+message_ptr = bp + 4
+index = bp + 6
+proc interpreter_runtime_error
+    push bp
+    mov bp, sp
+    push ax
+
+    push [index]
+    push [message_ptr]
+    push offset runtime_error_start
+    call show_file_error
+
+    ; FIXME: We shouldn't exit here, but this is our only way now
+    mov ax, 4C00h
+    int 21h
+
+    pop ax
+    pop bp
+    ret 4
 endp interpreter_runtime_error
 
 start:
