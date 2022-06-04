@@ -21,14 +21,15 @@ DATASEG
     TOKEN_TYPE_LEFT_PAREN = 16
     TOKEN_TYPE_RIGHT_PAREN = 17
     TOKEN_TYPE_EQU_EQU = 18
-    TOKEN_TYPE_LESS_EQU = 19
-    TOKEN_TYPE_GREATER_EQU = 20
-    TOKEN_TYPE_LESS_THAN = 21
-    TOKEN_TYPE_GREATER_THAN = 22
-    TOKEN_TYPE_AMPERSAND_AMPERSAND = 23
-    TOKEN_TYPE_PIPE_PIPE = 24
-    TOKEN_TYPE_EXCLAMATION_MARK = 25
-    TOKEN_TYPE_STRING = 26
+    TOKEN_TYPE_EXCLAMATION_MARK_EQU = 19
+    TOKEN_TYPE_LESS_EQU = 20
+    TOKEN_TYPE_GREATER_EQU = 21
+    TOKEN_TYPE_LESS_THAN = 22
+    TOKEN_TYPE_GREATER_THAN = 23
+    TOKEN_TYPE_AMPERSAND_AMPERSAND = 24
+    TOKEN_TYPE_PIPE_PIPE = 25
+    TOKEN_TYPE_EXCLAMATION_MARK = 26
+    TOKEN_TYPE_STRING = 27
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -47,14 +48,15 @@ DATASEG
     EXPR_TYPE_MOD = 7
     EXPR_TYPE_NEG = 8
     EXPR_TYPE_CMP_EQUALS = 9
-    EXPR_TYPE_CMP_SMALLER = 10
-    EXPR_TYPE_CMP_BIGGER = 11
-    EXPR_TYPE_CMP_SMALLER_EQUALS = 12
-    EXPR_TYPE_CMP_BIGGER_EQUALS = 13
-    EXPR_TYPE_AND = 14
-    EXPR_TYPE_OR = 15
-    EXPR_TYPE_NOT = 16
-    EXPR_TYPE_STRING = 17
+    EXPR_TYPE_CMP_NOT_EQUAL = 10
+    EXPR_TYPE_CMP_SMALLER = 11
+    EXPR_TYPE_CMP_BIGGER = 12
+    EXPR_TYPE_CMP_SMALLER_EQUALS = 13
+    EXPR_TYPE_CMP_BIGGER_EQUALS = 14
+    EXPR_TYPE_AND = 15
+    EXPR_TYPE_OR = 16
+    EXPR_TYPE_NOT = 17
+    EXPR_TYPE_STRING = 18
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
@@ -190,11 +192,12 @@ DATASEG
     AMOUNT_SINGLE_BYTE_TOKENS = 13
 
     double_byte_tokens db TOKEN_TYPE_EQU_EQU, "=="
+                       db TOKEN_TYPE_EXCLAMATION_MARK_EQU, "!="
                        db TOKEN_TYPE_LESS_EQU, "<="
                        db TOKEN_TYPE_GREATER_EQU, ">="
                        db TOKEN_TYPE_AMPERSAND_AMPERSAND, "&&"
                        db TOKEN_TYPE_PIPE_PIPE, "||"
-    AMOUNT_DOUBLE_BYTE_TOKENS = 5
+    AMOUNT_DOUBLE_BYTE_TOKENS = 6
 
     ; Error related stuff
     file_error_line_message db " [line $"
@@ -1848,6 +1851,8 @@ proc expr_delete
     je @@choice_binary
     cmp al, EXPR_TYPE_CMP_EQUALS
     je @@choice_binary
+    cmp al, EXPR_TYPE_CMP_NOT_EQUAL
+    je @@choice_binary
     cmp al, EXPR_TYPE_CMP_SMALLER
     je @@choice_binary
     cmp al, EXPR_TYPE_CMP_BIGGER
@@ -2527,6 +2532,12 @@ proc parser_parse_expr_cmp
 
     mov [word ptr new_expr_type], EXPR_TYPE_CMP_EQUALS
     push TOKEN_TYPE_EQU_EQU
+    call parser_match
+    test ax, ax
+    jnz @@matched
+
+    mov [word ptr new_expr_type], EXPR_TYPE_CMP_NOT_EQUAL
+    push TOKEN_TYPE_EXCLAMATION_MARK_EQU
     call parser_match
     test ax, ax
     jnz @@matched
@@ -4272,11 +4283,13 @@ proc expr_neg_eval
 endp expr_neg_eval
 
 expr_ptr = bp + 4
-result = bp - 2
+lhs_value = bp - 2
+rhs_value = bp - 4
+result = bp - 6
 proc expr_cmp_equals_eval
     push bp
     mov bp, sp
-    sub sp, 2
+    sub sp, 6
     push es
 
     mov ax, [expr_ptr]
@@ -4313,10 +4326,69 @@ proc expr_cmp_equals_eval
     mov ax, es
 
     pop es
-    add sp, 2
+    add sp, 6
     pop bp
     ret 2
 endp expr_cmp_equals_eval
+
+expr_ptr = bp + 4
+lhs_value = bp - 2
+rhs_value = bp - 4
+result = bp - 6
+proc expr_cmp_not_equal_eval
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    ; Eval lhs and store it
+    push [es:EXPR_BINARY_OFF_LHS]
+    call expr_eval
+    mov [lhs_value], ax
+    ; Eval rhs and store it
+    push [es:EXPR_BINARY_OFF_RHS]
+    call expr_eval
+    mov [rhs_value], ax
+
+    push [rhs_value]
+    push [lhs_value]
+    call object_eq
+    mov [result], ax
+    test ax, ax
+    jz @@was_zero
+
+    mov [word ptr result], 0
+    jmp @@end_check
+
+@@was_zero:
+    mov [word ptr result], 1
+
+@@end_check:
+
+    push offset object_number_type
+    call object_new
+    mov es, ax
+
+    mov ax, [result]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; Deref evaluated values
+    push [lhs_value]
+    call object_deref
+    push [rhs_value]
+    call object_deref
+
+    ; To return
+    mov ax, es
+
+    pop es
+    add sp, 6
+    pop bp
+    ret 2
+endp expr_cmp_not_equal_eval
 
 expr_ptr = bp + 4
 proc expr_cmp_smaller_eval
@@ -4608,6 +4680,8 @@ proc expr_eval
     je choice_eval_neg
     cmp al, EXPR_TYPE_CMP_EQUALS
     je choice_eval_cmp_equals
+    cmp al, EXPR_TYPE_CMP_NOT_EQUAL
+    je choice_eval_cmp_not_equal
     cmp al, EXPR_TYPE_CMP_SMALLER
     je choice_eval_cmp_smaller
     cmp al, EXPR_TYPE_CMP_BIGGER
@@ -4662,6 +4736,10 @@ choice_eval_neg:
 
 choice_eval_cmp_equals:
     mov ax, offset expr_cmp_equals_eval
+    jmp end_choice_eval
+
+choice_eval_cmp_not_equal:
+    mov ax, offset expr_cmp_not_equal_eval
     jmp end_choice_eval
 
 choice_eval_cmp_smaller:
