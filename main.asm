@@ -98,19 +98,61 @@ DATASEG
     INSTRUCTION_MAX_SIZE = 7
 
     ; Object types
-    OBJECT_TYPE_NUMBER = 1
-    OBJECT_TYPE_STRING = 2
+    OBJECT_TYPE_OFF_FN_DELETE = 0
+    OBJECT_TYPE_OFF_FN_ADD = 2
+    OBJECT_TYPE_OFF_FN_SUB = 4
+    OBJECT_TYPE_OFF_FN_MUL = 6
+    OBJECT_TYPE_OFF_FN_DIV = 8
+    OBJECT_TYPE_OFF_FN_MOD = 10
+    OBJECT_TYPE_OFF_FN_EQ = 12
+    OBJECT_TYPE_OFF_FN_SMALLER = 14
+    OBJECT_TYPE_OFF_FN_BIGGER = 16
+    OBJECT_TYPE_OFF_FN_SMALLER_EQ = 18
+    OBJECT_TYPE_OFF_FN_BIGGER_EQ = 20
+    OBJECT_TYPE_OFF_FN_NEG = 22
+    OBJECT_TYPE_OFF_FN_TO_BOOL = 24
+    OBJECT_TYPE_OFF_FN_SHOW = 26
+
+    object_number_type dw 0
+                       dw offset object_number_add
+                       dw offset object_number_sub
+                       dw offset object_number_mul
+                       dw offset object_number_div
+                       dw offset object_number_mod
+                       dw offset object_number_eq
+                       dw offset object_number_smaller
+                       dw offset object_number_bigger
+                       dw offset object_number_smaller_eq
+                       dw offset object_number_bigger_eq
+                       dw offset object_number_neg
+                       dw offset object_number_to_bool
+                       dw offset object_number_show
+
+    object_string_type dw offset object_string_delete
+                       dw 0 ; TODO: Add this
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw offset object_string_eq
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw offset object_string_to_bool
+                       dw offset object_string_show
 
     ; Object offsets
     OBJECT_OFF_TYPE = 0
-    OBJECT_OFF_REFCOUNT = 1
+    OBJECT_OFF_REFCOUNT = 2
 
-    OBJECT_NUMBER_OFF_NUMBER = 3
+    OBJECT_NUMBER_OFF_NUMBER = 4
 
-    OBJECT_STRING_OFF_SOURCE = 3
-    OBJECT_STRING_OFF_LENGTH = 5
+    OBJECT_STRING_OFF_SOURCE = 4
+    OBJECT_STRING_OFF_LENGTH = 6
 
-    OBJECT_MAX_SIZE = 7
+    OBJECT_MAX_SIZE = 8
 
     ; Misc
     PSP_segment dw ?
@@ -186,6 +228,8 @@ DATASEG
     runtime_error_could_not_open_file db "Could not open file$"
     runtime_error_div_by_zero db "Division by 0$"
     runtime_error_mul_overflow db "Overflowed beyond 16-bit when multiplying$"
+    runtime_error_invalid_operator_types db "Invalid operator types$"
+    runtime_error_invalid_operator_type db "Invalid operator type$"
 
     ; TODO: Make this a hashmap?
     ; FIXME: Allows up to 16 variables
@@ -3143,269 +3187,7 @@ proc parser_delete
     ret
 endp parser_delete
 
-; Interpreter procedures
-
-object_type = bp + 4
-proc object_new
-    push bp
-    mov bp, sp
-    push es
-
-    ; Allocate
-    push OBJECT_MAX_SIZE
-    call heap_alloc
-    mov es, ax
-    ; Add type
-    mov ax, [object_type]
-    mov [es:OBJECT_OFF_TYPE], al
-    mov [word ptr es:OBJECT_OFF_REFCOUNT], 1
-    ; Prepare for return
-    mov ax, es
-
-    pop es
-    pop bp
-    ret 2
-endp object_new
-
-; Increment refcount
-object_ptr = bp + 4
-proc object_ref
-    push bp
-    mov bp, sp
-    push ax
-    push es
-
-    mov ax, [object_ptr]
-    mov es, ax
-
-    inc [word ptr es:OBJECT_OFF_REFCOUNT]
-
-    pop es
-    pop ax
-    pop bp
-    ret 2
-endp object_ref
-
-; Decrement refcount and maybe remove the object
-object_ptr = bp + 4
-proc object_deref
-    push bp
-    mov bp, sp
-    push ax
-    push es
-
-    mov ax, [object_ptr]
-    mov es, ax
-
-    ; Decrement the amount of references we have
-    dec [word ptr es:OBJECT_OFF_REFCOUNT]
-
-    cmp [word ptr es:OBJECT_OFF_REFCOUNT], 0
-    jne @@not_delete
-
-    mov al, [es:OBJECT_OFF_TYPE]
-    cmp al, OBJECT_TYPE_STRING
-    je @@choice_string
-
-    jmp @@end_delete
-
-@@choice_string:
-    push [es:OBJECT_STRING_OFF_SOURCE]
-    call heap_free
-
-@@end_delete:
-
-    push es
-    call heap_free
-
-@@not_delete:
-
-    pop es
-    pop ax
-    pop bp
-    ret 2
-endp object_deref
-
-object_ptr = bp + 4
-proc object_number_to_bool
-    push bp
-    mov bp, sp
-    push es
-
-    mov ax, [object_ptr]
-    mov es, ax
-
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
-    test ax, ax
-
-    test ax, ax
-    jnz @@object_truthy
-
-    mov ax, 0
-    jmp @@object_check_end
-
-@@object_truthy:
-    mov ax, 1
-
-@@object_check_end:
-
-    pop es
-    pop bp
-    ret 2
-endp object_number_to_bool
-
-object_ptr = bp + 4
-proc object_to_bool
-    push bp
-    mov bp, sp
-    push es
-
-    mov ax, [object_ptr]
-    mov es, ax
-
-    mov al, [es:OBJECT_OFF_TYPE]
-
-    cmp al, OBJECT_TYPE_NUMBER
-    je @@choice_number
-
-    call panic
-
-@@choice_number:
-    push es
-    call object_number_to_bool
-
-@@choice_end:
-
-    pop es
-    pop bp
-    ret 2
-endp object_to_bool
-
-expr_ptr = bp + 4
-number = bp - 2
-proc expr_number_eval
-    push bp
-    mov bp, sp
-    sub sp, 2
-    push es
-
-    ; Store the expr segment
-    mov ax, [expr_ptr]
-    mov es, ax
-
-    ; Store the number
-    mov ax, [es:EXPR_NUMBER_OFF_NUMBER]
-    mov [number], ax
-
-    ; Create a value
-    push OBJECT_TYPE_NUMBER
-    call object_new
-    mov es, ax
-
-    ; Set the value's number
-    mov ax, [number]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
-
-    ; Set ax to new value so we can return it
-    mov ax, es
-
-    pop es
-    add sp, 2
-    pop bp
-    ret 2
-endp expr_number_eval
-
-expr_ptr = bp + 4
-proc expr_var_eval
-    push bp
-    mov bp, sp
-    push es
-
-    mov ax, [expr_ptr]
-    mov es, ax
-
-    mov ax, [es:EXPR_VAR_OFF_NAME]
-    push ax
-    call interpreter_get_variable
-
-    test ax, ax
-    jnz found_variable
-
-    ; If we got here, we didn't find a variable
-    push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_variable_not_found
-    call interpreter_runtime_error
-
-found_variable:
-
-    pop es
-    pop bp
-    ret 2
-endp expr_var_eval
-
-expr_ptr = bp + 4
-operator_func = bp + 6
-lhs_value = bp - 2
-rhs_value = bp - 4
-lhs_number = bp - 6
-rhs_number = bp - 8
-proc expr_binary_eval
-    push bp
-    mov bp, sp
-    sub sp, 8
-    push es
-
-    ; Store the expr segment
-    mov ax, [expr_ptr]
-    mov es, ax
-
-    ; Eval lhs
-    push [es:EXPR_BINARY_OFF_LHS]
-    call expr_eval
-    mov [lhs_value], ax
-    ; Eval rhs
-    push [es:EXPR_BINARY_OFF_RHS]
-    call expr_eval
-    mov [rhs_value], ax
-
-    ; FIXME: Make sure we have a number in lhs and rhs
-    mov ax, [lhs_value]
-    mov es, ax
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
-    mov [lhs_number], ax
-
-    mov ax, [rhs_value]
-    mov es, ax
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
-    mov [rhs_number], ax
-
-    ; Dereference the lhs and rhs of the expression
-    push [lhs_value]
-    call object_deref
-    push [rhs_value]
-    call object_deref
-
-    ; Create a value
-    push OBJECT_TYPE_NUMBER
-    call object_new
-    mov es, ax
-
-    ; Set the value's number
-    push [expr_ptr]
-    push [rhs_number]
-    push [lhs_number]
-    mov ax, [operator_func]
-    call ax
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
-
-    ; Set ax to new value so we can return it
-    mov ax, es
-
-    pop es
-    add sp, 8
-    pop bp
-    ret 4
-endp expr_binary_eval
+; Number operations
 
 lhs = bp + 4
 rhs = bp + 6
@@ -3676,12 +3458,661 @@ proc operator_cmp_bigger_equals_func
     ret 6
 endp operator_cmp_bigger_equals_func
 
+; Number object
+
+object_ptr = bp + 4
+proc object_number_show
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+
+    push ax
+    call print_word
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp object_number_show
+
+; Calls the function on the two number objects
+operator_func = bp + 4
+lhs_value = bp + 6
+rhs_value = bp + 8
+expr_ptr = bp + 10
+lhs_number = bp - 2
+rhs_number = bp - 4
+result = bp - 6
+proc object_number_operation
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    mov ax, [lhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov [lhs_number], ax
+
+    mov ax, [rhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov [rhs_number], ax
+
+    mov ax, [operator_func]
+    push [expr_ptr]
+    push [rhs_number]
+    push [lhs_number]
+    call ax
+    mov [result], ax
+
+    ; Create a number object with the new value
+    push offset object_number_type
+    call object_new
+    mov es, ax
+    mov ax, [result]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+    ; Return the number object
+    mov ax, es
+
+    pop es
+    add sp, 6
+    pop bp
+    ret 8
+endp object_number_operation
+
+; lhs + rhs
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_add
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_add_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_add
+
+; lhs - rhs
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_sub
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_sub_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_sub
+
+; lhs * rhs
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_mul
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_mul_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_mul
+
+; lhs / rhs
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_div
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_div_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_div
+
+; lhs % rhs
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_mod
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_mod_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_mod
+
+; Is lhs == rhs?
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_eq
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_cmp_equals_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_eq
+
+; Is lhs < rhs?
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_smaller
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_cmp_smaller_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_smaller
+
+; Is lhs > rhs?
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_bigger
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_cmp_bigger_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_bigger
+
+; Is lhs <= rhs?
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_smaller_eq
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_cmp_smaller_equals_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_smaller_eq
+
+; Is lhs >= rhs?
+lhs_value = bp + 4
+rhs_value = bp + 6
+expr_ptr = bp + 8
+proc object_number_bigger_eq
+    push bp
+    mov bp, sp
+
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    push offset operator_cmp_bigger_equals_func
+    call object_number_operation
+
+    pop bp
+    ret 6
+endp object_number_bigger_eq
+
+object_ptr = bp + 4
+neg_number = bp - 2
+proc object_number_neg
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    neg ax
+    mov [neg_number], ax
+
+    push offset object_number_type
+    call object_new
+    mov es, ax
+
+    mov ax, [neg_number]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; To return the new number object
+    mov ax, es
+
+    pop es
+    add sp, 2
+    pop bp
+    ret 2
+endp object_number_neg
+
+; Is number truthy?
+object_ptr = bp + 4
+proc object_number_to_bool
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    test ax, ax
+
+    test ax, ax
+    jnz @@object_truthy
+
+    mov ax, 0
+    jmp @@object_check_end
+
+@@object_truthy:
+    mov ax, 1
+
+@@object_check_end:
+
+    pop es
+    pop bp
+    ret 2
+endp object_number_to_bool
+
+; String object
+
+object_ptr = bp + 4
+proc object_string_delete
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    push [es:OBJECT_STRING_OFF_SOURCE]
+    call heap_free
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp object_string_delete
+
+object_ptr = bp + 4
+proc object_string_show
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    push ds
+    mov ax, [es:OBJECT_STRING_OFF_SOURCE]
+    mov ds, ax
+    push 0
+    call print_nul_terminated_string
+    pop ds
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp object_string_show
+
+object_ptr = bp + 4
+object2_ptr = bp + 6
+proc object_string_eq
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [object2_ptr]
+    mov es, ax
+    push [es:OBJECT_STRING_OFF_SOURCE]
+    mov ax, [object_ptr]
+    mov es, ax
+    push [es:OBJECT_STRING_OFF_SOURCE]
+    call cstrs_eq
+
+    pop es
+    pop bp
+    ret 4
+endp object_string_eq
+
+object_ptr = bp + 4
+proc object_string_to_bool
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_STRING_OFF_LENGTH]
+    test ax, ax
+    jz @@zero_length
+
+    mov ax, 1
+    jmp @@end_decide_truthy
+
+@@zero_length:
+    mov ax, 0
+
+@@end_decide_truthy:
+
+    pop es
+    pop bp
+    ret 2
+endp object_string_to_bool
+
+; Interpreter procedures
+
+object_type = bp + 4
+proc object_new
+    push bp
+    mov bp, sp
+    push es
+
+    ; Allocate
+    push OBJECT_MAX_SIZE
+    call heap_alloc
+    mov es, ax
+    ; Add type
+    mov ax, [object_type]
+    mov [es:OBJECT_OFF_TYPE], ax
+    mov [word ptr es:OBJECT_OFF_REFCOUNT], 1
+    ; Prepare for return
+    mov ax, es
+
+    pop es
+    pop bp
+    ret 2
+endp object_new
+
+; Increment refcount
+object_ptr = bp + 4
+proc object_ref
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    inc [word ptr es:OBJECT_OFF_REFCOUNT]
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp object_ref
+
+; Decrement refcount and maybe remove the object
+object_ptr = bp + 4
+proc object_deref
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    ; Decrement the amount of references we have
+    dec [word ptr es:OBJECT_OFF_REFCOUNT]
+
+    cmp [word ptr es:OBJECT_OFF_REFCOUNT], 0
+    jne @@not_delete
+
+    mov bx, [es:OBJECT_OFF_TYPE]
+    mov ax, [bx + OBJECT_TYPE_OFF_FN_DELETE]
+    test ax, ax
+    jz @@end_delete ; If there is no delete function
+
+    ; If we got here, we need to delete the object
+    push [object_ptr]
+    call ax
+
+@@end_delete:
+
+    push es
+    call heap_free
+
+@@not_delete:
+
+    pop es
+    pop bx
+    pop ax
+    pop bp
+    ret 2
+endp object_deref
+
+; Is object truthy
+object_ptr = bp + 4
+proc object_to_bool
+    push bp
+    mov bp, sp
+    push bx
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov bx, [es:OBJECT_OFF_TYPE]
+
+    mov ax, [bx + OBJECT_TYPE_OFF_FN_TO_BOOL]
+    test ax, ax
+    jnz @@have_fn
+
+    ; The default is for to_bool to return true
+    mov ax, 1
+    jmp @@end_to_bool
+
+@@have_fn:
+    push es
+    call ax
+
+@@end_to_bool:
+
+    pop es
+    pop bx
+    pop bp
+    ret 2
+endp object_to_bool
+
+expr_ptr = bp + 4
+number = bp - 2
+proc expr_number_eval
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    ; Store the expr segment
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    ; Store the number
+    mov ax, [es:EXPR_NUMBER_OFF_NUMBER]
+    mov [number], ax
+
+    ; Create a value
+    push offset object_number_type
+    call object_new
+    mov es, ax
+
+    ; Set the value's number
+    mov ax, [number]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; Set ax to new value so we can return it
+    mov ax, es
+
+    pop es
+    add sp, 2
+    pop bp
+    ret 2
+endp expr_number_eval
+
+expr_ptr = bp + 4
+proc expr_var_eval
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    mov ax, [es:EXPR_VAR_OFF_NAME]
+    push ax
+    call interpreter_get_variable
+
+    test ax, ax
+    jnz found_variable
+
+    ; If we got here, we didn't find a variable
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_variable_not_found
+    call interpreter_runtime_error
+
+found_variable:
+
+    pop es
+    pop bp
+    ret 2
+endp expr_var_eval
+
+expr_ptr = bp + 4
+func_offset = bp + 6
+lhs_value = bp - 2
+rhs_value = bp - 4
+lhs_type = bp - 6
+rhs_type = bp - 8
+proc expr_binary_eval
+    push bp
+    mov bp, sp
+    sub sp, 8
+    push bx
+    push es
+
+    ; Store the expr segment
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    ; Eval lhs
+    push [es:EXPR_BINARY_OFF_LHS]
+    call expr_eval
+    mov [lhs_value], ax
+    ; Eval rhs
+    push [es:EXPR_BINARY_OFF_RHS]
+    call expr_eval
+    mov [rhs_value], ax
+
+    ; Get type of lhs
+    mov ax, [lhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_OFF_TYPE]
+    mov [lhs_type], ax
+    ; Get type of rhs
+    mov ax, [rhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_OFF_TYPE]
+    mov [rhs_type], ax
+
+    ; Find out if the types are the same
+    mov bx, [lhs_type]
+    cmp bx, [rhs_type]
+    je @@type_match
+
+    mov ax, [expr_ptr]
+    mov es, ax
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_invalid_operator_types
+    call interpreter_runtime_error
+
+@@type_match:
+    add bx, [func_offset] ; Make bx the index of the function pointer
+    mov ax, [bx]
+
+    ; Call the function
+    push [expr_ptr]
+    push [rhs_value]
+    push [lhs_value]
+    call ax
+
+    ; Dereference the lhs and rhs of the expression
+    push [lhs_value]
+    call object_deref
+    push [rhs_value]
+    call object_deref
+
+    pop es
+    pop bx
+    add sp, 8
+    pop bp
+    ret 4
+endp expr_binary_eval
+
 expr_ptr = bp + 4
 proc expr_add_eval
     push bp
     mov bp, sp
 
-    push offset operator_add_func
+    push OBJECT_TYPE_OFF_FN_ADD
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3694,7 +4125,7 @@ proc expr_sub_eval
     push bp
     mov bp, sp
 
-    push offset operator_sub_func
+    push OBJECT_TYPE_OFF_FN_SUB
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3707,7 +4138,7 @@ proc expr_mul_eval
     push bp
     mov bp, sp
 
-    push offset operator_mul_func
+    push OBJECT_TYPE_OFF_FN_MUL
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3720,7 +4151,7 @@ proc expr_div_eval
     push bp
     mov bp, sp
 
-    push offset operator_div_func
+    push OBJECT_TYPE_OFF_FN_DIV
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3733,7 +4164,7 @@ proc expr_mod_eval
     push bp
     mov bp, sp
 
-    push offset operator_mod_func
+    push OBJECT_TYPE_OFF_FN_MOD
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3747,35 +4178,39 @@ proc expr_neg_eval
     push bp
     mov bp, sp
     sub sp, 2
+    push bx
     push es
-
-    ; FIXME: Verify it's a number
 
     mov ax, [expr_ptr]
     mov es, ax
 
     push [es:EXPR_SINGLE_OFF_INNER]
     call expr_eval
-
     mov es, ax
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
-    neg ax
-    mov [neg_number], ax
+
+    mov bx, [es:OBJECT_OFF_TYPE]
+    mov ax, [bx + OBJECT_TYPE_OFF_FN_NEG]
+
+    ; Check if NEG is a function that's defined
+    test ax, ax
+    jnz @@had_fn
+
+    mov ax, [expr_ptr]
+    mov es, ax
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_invalid_operator_type
+    call interpreter_runtime_error
+
+@@had_fn:
+
+    push es
+    call ax ; The returned value here (into ax) is the return value of the wrapper function
 
     push es
     call object_deref
 
-    push OBJECT_TYPE_NUMBER
-    call object_new
-
-    mov es, ax
-    mov ax, [neg_number]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
-
-    ; Return new number object
-    mov ax, es
-
     pop es
+    pop bx
     add sp, 2
     pop bp
     ret 2
@@ -3786,7 +4221,8 @@ proc expr_cmp_equals_eval
     push bp
     mov bp, sp
 
-    push offset operator_cmp_equals_func
+    ; FIXME: This does not depend on type so it should not use expr_binary_eval
+    push OBJECT_TYPE_OFF_FN_EQ
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3799,7 +4235,7 @@ proc expr_cmp_smaller_eval
     push bp
     mov bp, sp
 
-    push offset operator_cmp_smaller_func
+    push OBJECT_TYPE_OFF_FN_SMALLER
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3812,7 +4248,7 @@ proc expr_cmp_bigger_eval
     push bp
     mov bp, sp
 
-    push offset operator_cmp_bigger_func
+    push OBJECT_TYPE_OFF_FN_BIGGER
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3825,7 +4261,7 @@ proc expr_cmp_smaller_equals_eval
     push bp
     mov bp, sp
 
-    push offset operator_cmp_smaller_equals_func
+    push OBJECT_TYPE_OFF_FN_SMALLER_EQ
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3833,13 +4269,12 @@ proc expr_cmp_smaller_equals_eval
     ret 2
 endp expr_cmp_smaller_equals_eval
 
-
 expr_ptr = bp + 4
 proc expr_cmp_bigger_equals_eval
     push bp
     mov bp, sp
 
-    push offset operator_cmp_bigger_equals_func
+    push OBJECT_TYPE_OFF_FN_BIGGER_EQ
     push [expr_ptr]
     call expr_binary_eval
 
@@ -3891,7 +4326,7 @@ proc expr_and_eval
     call object_deref
 
     ; Create a boolean-like number
-    push OBJECT_TYPE_NUMBER
+    push offset object_number_type
     call object_new
     mov es, ax
 
@@ -3956,7 +4391,7 @@ proc expr_or_eval
     call object_deref
 
     ; Create a boolean-like number
-    push OBJECT_TYPE_NUMBER
+    push offset object_number_type
     call object_new
     mov es, ax
 
@@ -4002,7 +4437,7 @@ proc expr_not_eval
     push [evaluated_object]
     call object_deref
 
-    push OBJECT_TYPE_NUMBER
+    push offset object_number_type
     call object_new
     mov es, ax
 
@@ -4037,7 +4472,7 @@ proc expr_string_eval
     mov [string_length], ax
 
     ; Create a value
-    push OBJECT_TYPE_STRING
+    push offset object_string_type
     call object_new
     mov es, ax
 
@@ -4206,55 +4641,12 @@ proc instruction_assign_execute
     ret 2
 endp instruction_assign_execute
 
-object_ptr = bp + 4
-proc object_number_show
-    push bp
-    mov bp, sp
-    push ax
-    push es
-
-    mov ax, [object_ptr]
-    mov es, ax
-
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
-
-    push ax
-    call print_word
-
-    pop es
-    pop ax
-    pop bp
-    ret 2
-endp object_number_show
-
-object_ptr = bp + 4
-proc object_string_show
-    push bp
-    mov bp, sp
-    push ax
-    push es
-
-    mov ax, [object_ptr]
-    mov es, ax
-
-    mov ax, [es:OBJECT_STRING_OFF_SOURCE]
-    push ds
-    mov ds, ax
-    push 0
-    call print_nul_terminated_string
-    pop ds
-
-    pop es
-    pop ax
-    pop bp
-    ret 2
-endp object_string_show
-
 instruction_ptr = bp + 4
 proc instruction_show_execute
     push bp
     mov bp, sp
     push ax
+    push bx
     push es
 
     mov ax, [instruction_ptr]
@@ -4265,21 +4657,14 @@ proc instruction_show_execute
     call expr_eval
     mov es, ax
 
-    mov al, [es:OBJECT_OFF_TYPE]
+    mov bx, [es:OBJECT_OFF_TYPE]
 
-    cmp al, OBJECT_TYPE_NUMBER
-    je @@choice_number
-    cmp al, OBJECT_TYPE_STRING
-    je @@choice_string
+    mov ax, [bx + OBJECT_TYPE_OFF_FN_SHOW]
+    test ax, ax
+    jnz @@end_show
 
+    ; If we don't have a SHOW function defined
     call panic
-
-@@choice_number:
-    mov ax, offset object_number_show
-    jmp @@end_show
-
-@@choice_string:
-    mov ax, offset object_string_show
 
 @@end_show:
 
@@ -4295,6 +4680,7 @@ proc instruction_show_execute
     call object_deref
 
     pop es
+    pop bx
     pop ax
     pop bp
     ret 2
