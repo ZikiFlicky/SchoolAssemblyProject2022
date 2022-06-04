@@ -4234,11 +4234,15 @@ proc expr_cmp_equals_eval
     ; Eval lhs and store it
     push [es:EXPR_BINARY_OFF_LHS]
     call expr_eval
-    mov [lhs_ptr], ax
+    mov [lhs_value], ax
     ; Eval rhs and store it
     push [es:EXPR_BINARY_OFF_RHS]
     call expr_eval
-    mov [rhs_ptr], ax
+    mov [rhs_value], ax
+
+    mov ax, [lhs_value]
+    cmp ax, [rhs_value]
+    jne @@not_same_ptr
 
     ; Get type of lhs
     mov ax, [lhs_value]
@@ -4250,10 +4254,6 @@ proc expr_cmp_equals_eval
     mov es, ax
     mov ax, [es:OBJECT_OFF_TYPE]
     mov [rhs_type], ax
-
-    mov ax, [lhs_ptr]
-    cmp ax, [rhs_ptr]
-    jne @@not_same_ptr
 
     ; If they are the same object
     mov ax, 1
