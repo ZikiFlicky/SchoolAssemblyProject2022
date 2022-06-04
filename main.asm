@@ -160,6 +160,7 @@ DATASEG
     parser_error_invalid_token db "Invalid token$"
     parser_error_syntax_error db "Syntax error$"
     parser_error_expected_newline db "Expected newline$"
+    parser_error_number_too_big db "Number too big$"
     ; Panic related stuff
     panic_message db "* PANIC *", 13, 10, "$"
 
@@ -1016,7 +1017,18 @@ loop_digits:
     xor dx, dx
     mov bx, 10
     mul bx
-    ; FIXME: Check here if we have something in dx, which means that we have a number too big (more than 16-bit)
+
+    ; Check if the number is larger than 16-bit
+    test dx, dx
+    jz @@number_in_range
+
+    ; If we got here the number was too big
+    push [token_start_idx]
+    push offset parser_error_number_too_big
+    call parser_error
+
+@@number_in_range:
+
     mov [number], ax ; Move back the number multiplied by 10
 
     ; Make bx the pointer to the place in which the digit lies
