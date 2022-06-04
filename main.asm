@@ -818,8 +818,6 @@ proc read_bytes
     ret 2
 endp read_bytes
 
-; FIXME: Had "mov [token_type], TOKEN_TYPE_NEWLINE" which shouldn't be allowed
-
 backtrack = bp - 2
 proc file_read_newline
     push bp
@@ -1180,7 +1178,7 @@ proc lex_number
     cmp al, '9'
     jg not_number
 
-    mov [token_type], TOKEN_TYPE_NUMBER
+    mov [byte ptr token_type], TOKEN_TYPE_NUMBER
     mov ax, [backtrack]
     mov [token_start_idx], ax
     mov [word ptr token_length], 0
@@ -1436,7 +1434,7 @@ proc lex_var
     test ax, ax
     jz not_var
 
-    mov [token_type], TOKEN_TYPE_VAR
+    mov [byte ptr token_type], TOKEN_TYPE_VAR
     mov ax, [backtrack]
     mov [token_start_idx], ax
     mov [word ptr token_length], 0
@@ -1503,10 +1501,10 @@ proc lex_char
 
     ; Set token
     mov al, [new_token_type]
-    mov [token_type], al
+    mov [byte ptr token_type], al
     mov ax, [backtrack]
     mov [token_start_idx], ax
-    mov [token_length], 1
+    mov [word ptr token_length], 1
     mov ax, 1
     jmp lex_char_end
 
@@ -1561,7 +1559,7 @@ proc lex_double_byte_tokens
 @@matched:
     mov al, [bx + 0] ; Get token type
     mov [token_type], al
-    mov [token_length], 2
+    mov [word ptr token_length], 2
     mov ax, [backtrack]
     mov [token_start_idx], ax
     mov ax, 1 ; Return true
@@ -1613,7 +1611,7 @@ proc lex_single_byte_tokens
 @@matched:
     mov al, [bx + 0] ; Get token type
     mov [token_type], al
-    mov [token_length], 1
+    mov [word ptr token_length], 1
     mov ax, [backtrack]
     mov [token_start_idx], ax
     mov ax, 1 ; Return true
