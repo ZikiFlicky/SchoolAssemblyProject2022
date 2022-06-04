@@ -3940,6 +3940,62 @@ proc object_deref
     ret 2
 endp object_deref
 
+; Is object equal to another object
+lhs_value = bp + 4
+rhs_value = bp + 6
+lhs_type = bp - 2
+rhs_type = bp - 4
+proc object_eq
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push bx
+    push es
+
+    mov ax, [lhs_value]
+    cmp ax, [rhs_value]
+    jne @@not_same_ptr
+
+    ; If they are the same object
+    mov ax, 1
+    jmp @@end_cmp
+
+@@not_same_ptr:
+    ; Get type of lhs
+    mov ax, [lhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_OFF_TYPE]
+    mov [lhs_type], ax
+    ; Get type of rhs
+    mov ax, [rhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_OFF_TYPE]
+    mov [rhs_type], ax
+
+    ; Find out if the types are the same
+    mov bx, [lhs_type]
+    cmp bx, [rhs_type]
+    je @@type_match
+
+    ; Types don't match
+    mov ax, 0
+    jmp @@end_cmp
+
+@@type_match:
+    mov ax, [bx + OBJECT_TYPE_OFF_FN_EQ]
+    push [rhs_value]
+    push [lhs_value]
+    call ax ; Returns into ax
+
+@@end_cmp:
+
+    pop es
+    pop bx
+    add sp, 4
+    pop bp
+    ret 4
+endp object_eq
+
 ; Is object truthy
 object_ptr = bp + 4
 proc object_to_bool
@@ -4216,16 +4272,11 @@ proc expr_neg_eval
 endp expr_neg_eval
 
 expr_ptr = bp + 4
-lhs_ptr = bp - 2
-rhs_ptr = bp - 4
-lhs_type = bp - 6
-lhr_type = bp - 8
-result = bp - 10
+result = bp - 2
 proc expr_cmp_equals_eval
     push bp
     mov bp, sp
-    sub sp, 10
-    push bx
+    sub sp, 2
     push es
 
     mov ax, [expr_ptr]
@@ -4240,46 +4291,15 @@ proc expr_cmp_equals_eval
     call expr_eval
     mov [rhs_value], ax
 
-    mov ax, [lhs_value]
-    cmp ax, [rhs_value]
-    jne @@not_same_ptr
-
-    ; Get type of lhs
-    mov ax, [lhs_value]
-    mov es, ax
-    mov ax, [es:OBJECT_OFF_TYPE]
-    mov [lhs_type], ax
-    ; Get type of rhs
-    mov ax, [rhs_value]
-    mov es, ax
-    mov ax, [es:OBJECT_OFF_TYPE]
-    mov [rhs_type], ax
-
-    ; If they are the same object
-    mov ax, 1
-    jmp @@end_cmp
-
-@@not_same_ptr:
-    ; Find out if the types are the same
-    mov bx, [lhs_type]
-    cmp bx, [rhs_type]
-    je @@type_match
-
-    mov [word ptr result], 0
-    jmp @@end_cmp
-
-@@type_match:
-    mov ax, [bx + OBJECT_TYPE_OFF_FN_EQ]
     push [rhs_value]
     push [lhs_value]
-    call ax
+    call object_eq
     mov [result], ax
 
-@@end_cmp:
-    ; Create new number with the result
     push offset object_number_type
     call object_new
     mov es, ax
+
     mov ax, [result]
     mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
 
@@ -4293,8 +4313,7 @@ proc expr_cmp_equals_eval
     mov ax, es
 
     pop es
-    pop bx
-    add sp, 10
+    add sp, 2
     pop bp
     ret 2
 endp expr_cmp_equals_eval
