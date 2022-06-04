@@ -3346,29 +3346,6 @@ endp operator_mod_func
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
-proc operator_cmp_equals_func
-    push bp
-    mov bp, sp
-
-    mov ax, [lhs]
-    cmp ax, [rhs]
-    jne @@not_equal
-
-    mov ax, 1
-    jmp @@end_cmp
-
-@@not_equal:
-    mov ax, 0
-
-@@end_cmp:
-
-    pop bp
-    ret 6
-endp operator_cmp_equals_func
-
-lhs = bp + 4
-rhs = bp + 6
-expr_ptr = bp + 8
 proc operator_cmp_smaller_func
     push bp
     mov bp, sp
@@ -3620,19 +3597,41 @@ endp object_number_mod
 ; Is lhs == rhs?
 lhs_value = bp + 4
 rhs_value = bp + 6
-expr_ptr = bp + 8
+lhs_number = bp - 2
+rhs_number = bp - 4
 proc object_number_eq
     push bp
     mov bp, sp
+    sub sp, 4
+    push es
 
-    push [expr_ptr]
-    push [rhs_value]
-    push [lhs_value]
-    push offset operator_cmp_equals_func
-    call object_number_operation
+    ; TODO: Make this kind of operation a function (like object_number_to_number)
+    mov ax, [lhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov [lhs_number], ax
 
+    mov ax, [rhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov [rhs_number], ax
+
+    mov ax, [lhs_number]
+    cmp ax, [rhs_number]
+    jne @@not_equal
+
+    mov ax, 1
+    jmp @@end_cmp
+
+@@not_equal:
+    mov ax, 0
+
+@@end_cmp:
+
+    pop es
+    add sp, 4
     pop bp
-    ret 6
+    ret 4
 endp object_number_eq
 
 ; Is lhs < rhs?
@@ -3811,17 +3810,17 @@ proc object_string_show
     ret 2
 endp object_string_show
 
-object_ptr = bp + 4
-object2_ptr = bp + 6
+lhs_ptr = bp + 4
+rhs_ptr = bp + 6
 proc object_string_eq
     push bp
     mov bp, sp
     push es
 
-    mov ax, [object2_ptr]
+    mov ax, [rhs_ptr]
     mov es, ax
     push [es:OBJECT_STRING_OFF_SOURCE]
-    mov ax, [object_ptr]
+    mov ax, [lhs_ptr]
     mov es, ax
     push [es:OBJECT_STRING_OFF_SOURCE]
     call cstrs_eq
@@ -4217,15 +4216,76 @@ proc expr_neg_eval
 endp expr_neg_eval
 
 expr_ptr = bp + 4
+lhs_ptr = bp - 2
+rhs_ptr = bp - 4
+lhs_type = bp - 6
+lhr_type = bp - 8
+result = bp - 10
 proc expr_cmp_equals_eval
     push bp
     mov bp, sp
+    sub sp, 10
+    push bx
+    push es
 
-    ; FIXME: This does not depend on type so it should not use expr_binary_eval
-    push OBJECT_TYPE_OFF_FN_EQ
-    push [expr_ptr]
-    call expr_binary_eval
+    mov ax, [expr_ptr]
+    mov es, ax
 
+    ; Eval lhs and store it
+    push [es:EXPR_BINARY_OFF_LHS]
+    call expr_eval
+    mov [lhs_ptr], ax
+    ; Eval rhs and store it
+    push [es:EXPR_BINARY_OFF_RHS]
+    call expr_eval
+    mov [rhs_ptr], ax
+
+    ; Get type of lhs
+    mov ax, [lhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_OFF_TYPE]
+    mov [lhs_type], ax
+    ; Get type of rhs
+    mov ax, [rhs_value]
+    mov es, ax
+    mov ax, [es:OBJECT_OFF_TYPE]
+    mov [rhs_type], ax
+
+    ; Find out if the types are the same
+    mov bx, [lhs_type]
+    cmp bx, [rhs_type]
+    je @@type_match
+
+    mov [word ptr result], 0
+    jmp @@end_cmp
+
+@@type_match:
+    mov ax, [bx + OBJECT_TYPE_OFF_FN_EQ]
+    push [rhs_value]
+    push [lhs_value]
+    call ax
+    mov [result], ax
+
+@@end_cmp:
+    ; Create new number with the result
+    push offset object_number_type
+    call object_new
+    mov es, ax
+    mov ax, [result]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; Deref evaluated values
+    push [lhs_value]
+    call object_deref
+    push [rhs_value]
+    call object_deref
+
+    ; To return
+    mov ax, es
+
+    pop es
+    pop bx
+    add sp, 10
     pop bp
     ret 2
 endp expr_cmp_equals_eval
