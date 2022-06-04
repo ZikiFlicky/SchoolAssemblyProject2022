@@ -4251,6 +4251,15 @@ proc expr_cmp_equals_eval
     mov ax, [es:OBJECT_OFF_TYPE]
     mov [rhs_type], ax
 
+    mov ax, [lhs_ptr]
+    cmp ax, [rhs_ptr]
+    jne @@not_same_ptr
+
+    ; If they are the same object
+    mov ax, 1
+    jmp @@end_cmp
+
+@@not_same_ptr:
     ; Find out if the types are the same
     mov bx, [lhs_type]
     cmp bx, [rhs_type]
