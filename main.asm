@@ -2,6 +2,21 @@ IDEAL
 MODEL small
 STACK 300h
 DATASEG
+    ; Misc
+    PSP_segment dw ?
+
+
+    ; File related
+    file dw ?
+    file_idx dw 0
+    file_read_buffer db 100h dup(?)
+
+
+    ; Global token information
+    token_type db ?
+    token_start_idx dw ?
+    token_length dw ?
+
     ; Token types
     TOKEN_TYPE_VAR = 1
     TOKEN_TYPE_EQU = 2
@@ -37,6 +52,37 @@ DATASEG
     TOKEN_OFF_LENGTH = 3
 
     TOKEN_SIZE = 5
+
+    keyword_show db TOKEN_TYPE_SHOW, 4, "show"
+    keyword_if db TOKEN_TYPE_IF, 2, "if"
+    keyword_else db TOKEN_TYPE_ELSE, 4, "else"
+    keyword_loop db TOKEN_TYPE_LOOP, 4, "loop"
+    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop
+    AMOUNT_KEYWORDS = 4
+
+    single_byte_tokens db TOKEN_TYPE_EQU, '='
+                       db TOKEN_TYPE_PLUS, '+'
+                       db TOKEN_TYPE_MINUS, '-'
+                       db TOKEN_TYPE_STAR, '*'
+                       db TOKEN_TYPE_SLASH, '/'
+                       db TOKEN_TYPE_PERCENT, '%'
+                       db TOKEN_TYPE_LEFT_BRACE, '{'
+                       db TOKEN_TYPE_RIGHT_BRACE, '}'
+                       db TOKEN_TYPE_LEFT_PAREN, '('
+                       db TOKEN_TYPE_RIGHT_PAREN, ')'
+                       db TOKEN_TYPE_LESS_THAN, '<'
+                       db TOKEN_TYPE_GREATER_THAN, '>'
+                       db TOKEN_TYPE_EXCLAMATION_MARK, '!'
+    AMOUNT_SINGLE_BYTE_TOKENS = 13
+
+    double_byte_tokens db TOKEN_TYPE_EQU_EQU, "=="
+                       db TOKEN_TYPE_EXCLAMATION_MARK_EQU, "!="
+                       db TOKEN_TYPE_LESS_EQU, "<="
+                       db TOKEN_TYPE_GREATER_EQU, ">="
+                       db TOKEN_TYPE_AMPERSAND_AMPERSAND, "&&"
+                       db TOKEN_TYPE_PIPE_PIPE, "||"
+    AMOUNT_DOUBLE_BYTE_TOKENS = 6
+
 
     ; Expr types
     EXPR_TYPE_NUMBER = 1
@@ -99,7 +145,13 @@ DATASEG
 
     INSTRUCTION_MAX_SIZE = 7
 
-    ; Object types
+    ; Stores parsed instructions
+    ; FIXME: This can overflow + only allows a certain amount of instructions
+    parsed_instructions dw 10h dup(?)
+    amount_instructions dw 0
+
+
+    ; Object type offsets
     OBJECT_TYPE_OFF_FN_DELETE = 0
     OBJECT_TYPE_OFF_FN_ADD = 2
     OBJECT_TYPE_OFF_FN_SUB = 4
@@ -115,6 +167,7 @@ DATASEG
     OBJECT_TYPE_OFF_FN_TO_BOOL = 24
     OBJECT_TYPE_OFF_FN_SHOW = 26
 
+    ; Object types
     object_number_type dw 0
                        dw offset object_number_add
                        dw offset object_number_sub
@@ -148,56 +201,20 @@ DATASEG
     ; Object offsets
     OBJECT_OFF_TYPE = 0
     OBJECT_OFF_REFCOUNT = 2
-
+    ; Number offsets
     OBJECT_NUMBER_OFF_NUMBER = 4
-
+    ; String offsets
     OBJECT_STRING_OFF_SOURCE = 4
     OBJECT_STRING_OFF_LENGTH = 6
 
     OBJECT_MAX_SIZE = 8
 
-    ; Misc
-    PSP_segment dw ?
+    ; Interpreter variables
+    ; TODO: Make this a hashmap?
+    ; FIXME: Allows up to 16 variables
+    variables dw 10h * 2 dup(?)
+    amount_variables db 0
 
-    ; File related
-    file dw ?
-    file_idx dw 0
-    file_read_buffer db 100h dup(?)
-
-    token_type db ?
-    token_start_idx dw ?
-    token_length dw ?
-
-    ; Lexer related stuff
-    keyword_show db TOKEN_TYPE_SHOW, 4, "show"
-    keyword_if db TOKEN_TYPE_IF, 2, "if"
-    keyword_else db TOKEN_TYPE_ELSE, 4, "else"
-    keyword_loop db TOKEN_TYPE_LOOP, 4, "loop"
-    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop
-    AMOUNT_KEYWORDS = 4
-
-    single_byte_tokens db TOKEN_TYPE_EQU, '='
-                       db TOKEN_TYPE_PLUS, '+'
-                       db TOKEN_TYPE_MINUS, '-'
-                       db TOKEN_TYPE_STAR, '*'
-                       db TOKEN_TYPE_SLASH, '/'
-                       db TOKEN_TYPE_PERCENT, '%'
-                       db TOKEN_TYPE_LEFT_BRACE, '{'
-                       db TOKEN_TYPE_RIGHT_BRACE, '}'
-                       db TOKEN_TYPE_LEFT_PAREN, '('
-                       db TOKEN_TYPE_RIGHT_PAREN, ')'
-                       db TOKEN_TYPE_LESS_THAN, '<'
-                       db TOKEN_TYPE_GREATER_THAN, '>'
-                       db TOKEN_TYPE_EXCLAMATION_MARK, '!'
-    AMOUNT_SINGLE_BYTE_TOKENS = 13
-
-    double_byte_tokens db TOKEN_TYPE_EQU_EQU, "=="
-                       db TOKEN_TYPE_EXCLAMATION_MARK_EQU, "!="
-                       db TOKEN_TYPE_LESS_EQU, "<="
-                       db TOKEN_TYPE_GREATER_EQU, ">="
-                       db TOKEN_TYPE_AMPERSAND_AMPERSAND, "&&"
-                       db TOKEN_TYPE_PIPE_PIPE, "||"
-    AMOUNT_DOUBLE_BYTE_TOKENS = 6
 
     ; Error related stuff
     file_error_line_message db " [line $"
@@ -205,9 +222,11 @@ DATASEG
     file_error_end db "]: $"
     file_error_code_line_start db "> $"
 
+
     ; Lexer error related stuff
     lexer_error_start db "LexerError$"
     lexer_error_invalid_token db "Invalid token$"
+
 
     ; Parser error related stuff
     parser_error_start db "ParserError$"
@@ -216,14 +235,9 @@ DATASEG
     parser_error_expected_newline db "Expected newline$"
     parser_error_unexpected_newline db "Unxpected newline$"
     parser_error_number_too_big db "Number too big$"
-    ; Panic related stuff
-    panic_message db "* PANIC *", 13, 10, "$"
 
-    ; FIXME: This can overflow + only allows a certain amount of instructions
-    parsed_instructions dw 10h dup(?)
-    amount_instructions dw 0
 
-    ; Interpreter error stuff
+    ; Interpreter error related stuff
     runtime_error_no_state_start db "RuntimeError: $"
     runtime_error_start db "RuntimeError$"
     runtime_error_variable_not_found db "Variable not found$"
@@ -234,11 +248,9 @@ DATASEG
     runtime_error_invalid_operator_types db "Invalid operator types$"
     runtime_error_invalid_operator_type db "Invalid operator type$"
 
-    ; TODO: Make this a hashmap?
-    ; FIXME: Allows up to 16 variables
-    ; Interpreter stuff
-    variables dw 10h * 2 dup(?)
-    amount_variables db 0
+
+    ; Panic related stuff
+    panic_message db "* PANIC *", 13, 10, "$"
 CODESEG
 
 ; Misc functions
