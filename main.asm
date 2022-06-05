@@ -44,7 +44,8 @@ DATASEG
     TOKEN_TYPE_AMPERSAND_AMPERSAND = 24
     TOKEN_TYPE_PIPE_PIPE = 25
     TOKEN_TYPE_EXCLAMATION_MARK = 26
-    TOKEN_TYPE_STRING = 27
+    TOKEN_TYPE_COMMA = 27
+    TOKEN_TYPE_STRING = 28
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -73,7 +74,8 @@ DATASEG
                        db TOKEN_TYPE_LESS_THAN, '<'
                        db TOKEN_TYPE_GREATER_THAN, '>'
                        db TOKEN_TYPE_EXCLAMATION_MARK, '!'
-    AMOUNT_SINGLE_BYTE_TOKENS = 13
+                       db TOKEN_TYPE_COMMA, ','
+    AMOUNT_SINGLE_BYTE_TOKENS = 14
 
     double_byte_tokens db TOKEN_TYPE_EQU_EQU, "=="
                        db TOKEN_TYPE_EXCLAMATION_MARK_EQU, "!="
@@ -103,6 +105,7 @@ DATASEG
     EXPR_TYPE_OR = 16
     EXPR_TYPE_NOT = 17
     EXPR_TYPE_STRING = 18
+    EXPR_TYPE_VECTOR = 19
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
@@ -115,6 +118,9 @@ DATASEG
 
     EXPR_BINARY_OFF_LHS = 3
     EXPR_BINARY_OFF_RHS = 5
+
+    EXPR_VECTOR_OFF_X = 3
+    EXPR_VECTOR_OFF_Y = 5
 
     EXPR_VAR_OFF_NAME = 3
 
@@ -198,6 +204,26 @@ DATASEG
                        dw offset object_string_to_bool
                        dw offset object_string_show
 
+    object_vector_type dw 0
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw offset object_vector_eq
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw 0
+                       dw offset object_vector_show
+
+    ; Vector related variables
+    vector_print_start db "($"
+    vector_print_middle db ", $"
+    vector_print_end db ")$"
+
     ; Object offsets
     OBJECT_OFF_TYPE = 0
     OBJECT_OFF_REFCOUNT = 2
@@ -206,6 +232,9 @@ DATASEG
     ; String offsets
     OBJECT_STRING_OFF_SOURCE = 4
     OBJECT_STRING_OFF_LENGTH = 6
+    ; Vector offsets
+    OBJECT_VECTOR_OFF_X = 4
+    OBJECT_VECTOR_OFF_Y = 6
 
     OBJECT_MAX_SIZE = 8
 
@@ -247,6 +276,7 @@ DATASEG
     runtime_error_mul_overflow db "Overflowed beyond 16-bit when multiplying$"
     runtime_error_invalid_operator_types db "Invalid operator types$"
     runtime_error_invalid_operator_type db "Invalid operator type$"
+    runtime_error_expected_number db "Expected number$"
 
 
     ; Panic related stuff
@@ -2100,6 +2130,174 @@ proc parser_expect_newline
     ret 2
 endp parser_expect_newline
 
+number = bp - 2
+backtrack = bp - 4
+proc parser_parse_expr_number
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push es
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    ; Try to match a number token
+    push TOKEN_TYPE_NUMBER
+    call parser_match
+    test ax, ax
+    jz parse_expr_number_finish
+
+    call token_to_number ; Moves the actual number into ax
+    mov [number], ax
+
+    push [backtrack]
+    push EXPR_TYPE_NUMBER
+    call expr_new
+    mov es, ax
+
+    mov ax, [number]
+    mov [es:EXPR_NUMBER_OFF_NUMBER], ax
+
+    ; Move the address of the expr to ax so we can return it
+    mov ax, es
+    jmp parse_expr_number_finish
+
+parse_expr_number_failed:
+    mov ax, 0
+
+parse_expr_number_finish:
+
+    pop es
+    add sp, 4
+    pop bp
+    ret
+endp parser_parse_expr_number
+
+string = bp - 2
+backtrack = bp - 4
+proc parser_parse_expr_string
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push es
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    ; Try to match a string token
+    push TOKEN_TYPE_STRING
+    call parser_match
+    test ax, ax
+    jz @@not_string
+
+    call token_to_cstr ; Moves the allocated string segment into ax
+    mov [string], ax
+
+    push [backtrack]
+    push EXPR_TYPE_STRING
+    call expr_new
+    mov es, ax
+
+    mov ax, [string]
+    mov [es:EXPR_STRING_OFF_SOURCE], ax
+    mov ax, [token_length]
+    mov [es:EXPR_STRING_OFF_LENGTH], ax
+
+    ; Move the address of the expr to ax so we can return it
+    mov ax, es
+    jmp @@parse_end
+
+@@not_string:
+    mov ax, 0
+
+@@parse_end:
+
+    pop es
+    add sp, 4
+    pop bp
+    ret
+endp parser_parse_expr_string
+
+lhs_ptr = bp - 2
+rhs_ptr = bp - 4
+backtrack = bp - 6
+proc parser_parse_expr_vector
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push es
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    push TOKEN_TYPE_LEFT_PAREN
+    call parser_match
+    test ax, ax
+    jz @@parse_failed
+
+    call parser_parse_expr
+    test ax, ax
+    jz @@parse_failed
+    mov [lhs_ptr], ax
+
+    push TOKEN_TYPE_COMMA
+    call parser_match
+    test ax, ax
+    jz @@parse_failed_delete_lhs
+
+    call parser_parse_expr
+    test ax, ax
+    jz @@error_expected_rhs
+    mov [rhs_ptr], ax
+
+    push TOKEN_TYPE_RIGHT_PAREN
+    call parser_match
+    test ax, ax
+    jz @@error_syntax_error
+
+    ; If we got here we parsed everything
+    push [backtrack]
+    push EXPR_TYPE_VECTOR
+    call expr_new
+    mov es, ax
+    ; Set lhs and rhs
+    mov ax, [lhs_ptr]
+    mov [es:EXPR_VECTOR_OFF_X], ax
+    mov ax, [rhs_ptr]
+    mov [es:EXPR_VECTOR_OFF_Y], ax
+
+    mov ax, es
+    jmp @@parse_end
+
+@@parse_failed_delete_lhs:
+    push [lhs_ptr]
+    call expr_delete
+
+@@parse_failed:
+    mov ax, 0
+    push [backtrack]
+    call file_set_idx
+    jmp @@parse_end
+
+@@error_syntax_error:
+    push [rhs_ptr]
+    call expr_delete
+@@error_expected_rhs:
+    push [lhs_ptr]
+    call expr_delete
+
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@parse_end:
+
+    pop es
+    add sp, 6
+    pop bp
+    ret
+endp parser_parse_expr_vector
+
 inner_expr_ptr = bp - 2
 proc parser_parse_expr_paren
     push bp
@@ -2209,94 +2407,6 @@ proc parser_parse_expr_not
     ret
 endp parser_parse_expr_not
 
-number = bp - 2
-backtrack = bp - 4
-proc parser_parse_expr_number
-    push bp
-    mov bp, sp
-    sub sp, 4
-    push es
-
-    mov ax, [file_idx]
-    mov [backtrack], ax
-
-    ; Try to match a number token
-    push TOKEN_TYPE_NUMBER
-    call parser_match
-    test ax, ax
-    jz parse_expr_number_finish
-
-    call token_to_number ; Moves the actual number into ax
-    mov [number], ax
-
-    push [backtrack]
-    push EXPR_TYPE_NUMBER
-    call expr_new
-    mov es, ax
-
-    mov ax, [number]
-    mov [es:EXPR_NUMBER_OFF_NUMBER], ax
-
-    ; Move the address of the expr to ax so we can return it
-    mov ax, es
-    jmp parse_expr_number_finish
-
-parse_expr_number_failed:
-    mov ax, 0
-
-parse_expr_number_finish:
-
-    pop es
-    add sp, 4
-    pop bp
-    ret
-endp parser_parse_expr_number
-
-string = bp - 2
-backtrack = bp - 4
-proc parser_parse_expr_string
-    push bp
-    mov bp, sp
-    sub sp, 4
-    push es
-
-    mov ax, [file_idx]
-    mov [backtrack], ax
-
-    ; Try to match a string token
-    push TOKEN_TYPE_STRING
-    call parser_match
-    test ax, ax
-    jz @@not_string
-
-    call token_to_cstr ; Moves the allocated string segment into ax
-    mov [string], ax
-
-    push [backtrack]
-    push EXPR_TYPE_STRING
-    call expr_new
-    mov es, ax
-
-    mov ax, [string]
-    mov [es:EXPR_STRING_OFF_SOURCE], ax
-    mov ax, [token_length]
-    mov [es:EXPR_STRING_OFF_LENGTH], ax
-
-    ; Move the address of the expr to ax so we can return it
-    mov ax, es
-    jmp @@parse_end
-
-@@not_string:
-    mov ax, 0
-
-@@parse_end:
-
-    pop es
-    add sp, 4
-    pop bp
-    ret
-endp parser_parse_expr_string
-
 var_name = bp - 2
 backtrack = bp - 4
 proc parser_parse_expr_var    
@@ -2340,6 +2450,15 @@ endp parser_parse_expr_var
 
 ; Parse values/variables
 proc parser_parse_expr_single
+    call parser_parse_expr_number
+    test ax, ax
+    jnz @@end_parse
+    call parser_parse_expr_string
+    test ax, ax
+    jnz @@end_parse
+    call parser_parse_expr_vector
+    test ax, ax
+    jnz @@end_parse
     call parser_parse_expr_paren
     test ax, ax
     jnz @@end_parse
@@ -2347,12 +2466,6 @@ proc parser_parse_expr_single
     test ax, ax
     jnz @@end_parse
     call parser_parse_expr_not
-    test ax, ax
-    jnz @@end_parse
-    call parser_parse_expr_number
-    test ax, ax
-    jnz @@end_parse
-    call parser_parse_expr_string
     test ax, ax
     jnz @@end_parse
     call parser_parse_expr_var
@@ -3808,6 +3921,7 @@ proc object_string_delete
     ret 2
 endp object_string_delete
 
+; Print a string
 object_ptr = bp + 4
 proc object_string_show
     push bp
@@ -3831,6 +3945,7 @@ proc object_string_show
     ret 2
 endp object_string_show
 
+; Check if two strings are equal
 lhs_ptr = bp + 4
 rhs_ptr = bp + 6
 proc object_string_eq
@@ -3851,6 +3966,7 @@ proc object_string_eq
     ret 4
 endp object_string_eq
 
+; Convert string to a boolean value (if length > 0, 1 otherwise 0)
 object_ptr = bp + 4
 proc object_string_to_bool
     push bp
@@ -3876,6 +3992,99 @@ proc object_string_to_bool
     pop bp
     ret 2
 endp object_string_to_bool
+
+; Vector object
+
+object_ptr = bp + 4
+proc object_vector_show
+    push bp
+    mov bp, sp
+    push ax
+    push dx
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ah, 09h
+    lea dx, [byte ptr vector_print_start]
+    int 21h
+
+    push [es:OBJECT_VECTOR_OFF_X]
+    call print_word
+
+    mov ah, 09h
+    lea dx, [byte ptr vector_print_middle]
+    int 21h
+
+    push [es:OBJECT_VECTOR_OFF_Y]
+    call print_word
+
+    mov ah, 09h
+    lea dx, [byte ptr vector_print_end]
+    int 21h
+
+    pop es
+    pop dx
+    pop ax
+    pop bp
+    ret 2
+endp object_vector_show
+
+lhs_ptr = bp + 4
+rhs_ptr = bp + 6
+lhs_number = bp - 2
+rhs_number = bp - 4
+proc object_vector_eq
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push es
+
+    ; Store x of lhs
+    mov ax, [lhs_ptr]
+    mov es, ax
+    mov ax, [es:OBJECT_VECTOR_OFF_X]
+    mov [lhs_number], ax
+    ; Store x of rhs
+    mov ax, [rhs_ptr]
+    mov es, ax
+    mov ax, [es:OBJECT_VECTOR_OFF_X]
+    mov [rhs_number], ax
+
+    mov ax, [lhs_number]
+    cmp ax, [rhs_number]
+    jne @@not_equal
+
+    ; Store y of lhs
+    mov ax, [lhs_ptr]
+    mov es, ax
+    mov ax, [es:OBJECT_VECTOR_OFF_Y]
+    mov [lhs_number], ax
+    ; Store y of rhs
+    mov ax, [rhs_ptr]
+    mov es, ax
+    mov ax, [es:OBJECT_VECTOR_OFF_Y]
+    mov [rhs_number], ax
+
+    mov ax, [lhs_number]
+    cmp ax, [rhs_number]
+    jne @@not_equal
+
+    ; If we got here, the vectors are equal
+    mov ax, 1
+    jmp @@end_equality_check
+
+@@not_equal:
+    mov ax, 0
+
+@@end_equality_check:
+
+    pop es
+    add sp, 4
+    pop bp
+    ret 4
+endp object_vector_eq
 
 ; Interpreter procedures
 
@@ -4670,6 +4879,94 @@ proc expr_string_eval
 endp expr_string_eval
 
 expr_ptr = bp + 4
+x_value = bp - 2
+y_value = bp - 4
+x_number = bp - 6
+y_number = bp - 8
+proc expr_vector_eval
+    push bp
+    mov bp, sp
+    sub sp, 8
+    push es
+
+    ; Store the expr segment
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    push [es:EXPR_VECTOR_OFF_X]
+    call expr_eval
+    mov [x_value], ax
+
+    push [es:EXPR_VECTOR_OFF_Y]
+    call expr_eval
+    mov [y_value], ax
+
+    mov ax, [x_value]
+    mov es, ax
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
+    jne @@x_not_number
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov [x_number], ax
+
+    mov ax, [y_value]
+    mov es, ax
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
+    jne @@y_not_number
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov [y_number], ax
+
+    ; Create a value
+    push offset object_vector_type
+    call object_new
+    mov es, ax
+
+    mov ax, [x_number]
+    mov [es:OBJECT_VECTOR_OFF_X], ax
+    mov ax, [y_number]
+    mov [es:OBJECT_VECTOR_OFF_Y], ax
+
+    ; Set ax to new value so we can return it
+    mov ax, es
+    jmp @@end_eval
+
+@@x_not_number:
+    ; Set es to expr
+    mov ax, [expr_ptr]
+    mov es, ax
+    ; Set es to x of vector expr
+    mov ax, [es:EXPR_VECTOR_OFF_X]
+    mov es, ax
+    ; Call error with the index of x
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_expected_number
+    call interpreter_runtime_error
+
+@@y_not_number:
+    ; Set es to expr
+    mov ax, [expr_ptr]
+    mov es, ax
+    ; Set es to y of vector expr
+    mov ax, [es:EXPR_VECTOR_OFF_Y]
+    mov es, ax
+    ; Call error with the index of y
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_expected_number
+    call interpreter_runtime_error
+
+@@end_eval:
+
+    push [x_value]
+    call object_deref
+    push [y_value]
+    call object_deref
+
+    pop es
+    add sp, 8
+    pop bp
+    ret 2
+endp expr_vector_eval
+
+expr_ptr = bp + 4
 proc expr_eval
     push bp
     mov bp, sp
@@ -4716,6 +5013,8 @@ proc expr_eval
     je choice_eval_not
     cmp al, EXPR_TYPE_STRING
     je choice_eval_string
+    cmp al, EXPR_TYPE_VECTOR
+    je choice_eval_vector
 
     ; If we got here, our type is invalid
     call panic
@@ -4790,6 +5089,10 @@ choice_eval_not:
 
 choice_eval_string:
     mov ax, offset expr_string_eval
+    jmp end_choice_eval
+
+choice_eval_vector:
+    mov ax, offset expr_vector_eval
 
 end_choice_eval:
 
