@@ -4004,6 +4004,14 @@ proc object_eq
 
 @@type_match:
     mov ax, [bx + OBJECT_TYPE_OFF_FN_EQ]
+    test ax, ax
+    jnz @@had_eq_func
+
+    ; If we don't have an EQ function the objects aren't equal
+    mov ax, 0
+    jmp @@end_cmp
+
+@@had_eq_func:
     push [rhs_value]
     push [lhs_value]
     call ax ; Returns into ax
