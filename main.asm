@@ -5481,6 +5481,11 @@ proc instruction_line_execute
     mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
     mov [line_length], ax
 
+    push [arg1_value]
+    call object_deref
+    push [arg2_value]
+    call object_deref
+
     mov ax, [exec_func]
     push [line_length]
     push [start_y]
