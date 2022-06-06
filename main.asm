@@ -5746,13 +5746,12 @@ proc interpreter_runtime_error_no_state
     call error_setup
 
     ; ParserError:
-    mov ah, 09h
-    lea dx, [byte ptr runtime_error_no_state_start]
-    int 21h
+
+    push offset runtime_error_no_state_start
+    call print_nul_terminated_string
     ; Some error message
-    mov ah, 09h
-    mov dx, [message_ptr]
-    int 21h
+    push [message_ptr]
+    call print_nul_terminated_string
     call print_newline
 
     call wait_for_user_end_execution
