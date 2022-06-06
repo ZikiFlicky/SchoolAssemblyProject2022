@@ -5860,6 +5860,26 @@ endp interpreter_runtime_error
 
 start_x = bp + 4
 start_y = bp + 6
+proc graphics_convert_position_to_index
+    push bp
+    mov bp, sp
+    push bx
+    push dx
+
+    xor dx, dx
+    mov ax, [start_y]
+    mov bx, GRAPHICS_SCREEN_WIDTH
+    mul bx
+    add ax, [start_x]
+
+    pop dx
+    pop bx
+    pop bp
+    ret 4
+endp graphics_convert_position_to_index
+
+start_x = bp + 4
+start_y = bp + 6
 line_length = bp + 8
 proc graphic_show_xline
     push bp
@@ -5872,10 +5892,9 @@ proc graphic_show_xline
     mov ax, 0A000h
     mov es, ax
 
-    xor dx, dx
-    mov ax, [start_x]
-    mov bx, [start_y]
-    mul bx
+    push [start_y]
+    push [start_x]
+    call graphics_convert_position_to_index
     mov bx, ax
 
     mov ax, 0
@@ -5914,10 +5933,9 @@ proc graphic_show_yline
     mov ax, 0A000h
     mov es, ax
 
-    xor dx, dx
-    mov ax, [start_x]
-    mov bx, [start_y]
-    mul bx
+    push [start_y]
+    push [start_x]
+    call graphics_convert_position_to_index
     mov bx, ax
 
     mov ax, 0
