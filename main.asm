@@ -49,6 +49,7 @@ DATASEG
     TOKEN_TYPE_XLINE = 29
     TOKEN_TYPE_YLINE = 30
     TOKEN_TYPE_RECT = 31
+    TOKEN_TYPE_FILLEDRECT = 32
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -64,8 +65,11 @@ DATASEG
     keyword_xline db TOKEN_TYPE_XLINE, 5, "xline"
     keyword_yline db TOKEN_TYPE_YLINE, 5, "yline"
     keyword_rect db TOKEN_TYPE_RECT, 4, "rect"
-    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop, offset keyword_xline, offset keyword_yline, offset keyword_rect
-    AMOUNT_KEYWORDS = 7
+    keyword_filledrect db TOKEN_TYPE_FILLEDRECT, 10, "filledrect"
+    keywords dw offset keyword_show, offset keyword_if, offset keyword_else
+             dw offset keyword_loop, offset keyword_xline, offset keyword_yline
+             dw offset keyword_rect, offset keyword_filledrect
+    AMOUNT_KEYWORDS = 8
 
     single_byte_tokens db TOKEN_TYPE_EQU, '='
                        db TOKEN_TYPE_PLUS, '+'
@@ -142,6 +146,7 @@ DATASEG
     INSTRUCTION_TYPE_XLINE = 5
     INSTRUCTION_TYPE_YLINE = 6
     INSTRUCTION_TYPE_RECT = 7
+    INSTRUCTION_TYPE_FILLEDRECT = 8
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -2055,6 +2060,8 @@ proc instruction_delete
     je @@choice_two_args
     cmp al, INSTRUCTION_TYPE_RECT
     je @@choice_two_args
+    cmp al, INSTRUCTION_TYPE_FILLEDRECT
+    je @@choice_two_args
 
     ; If we got here we might not need to delete it
     jmp @@choice_end
@@ -3319,6 +3326,13 @@ proc parser_parse_rect
     ret
 endp parser_parse_rect
 
+proc parser_parse_filledrect
+    push INSTRUCTION_TYPE_FILLEDRECT
+    push TOKEN_TYPE_FILLEDRECT
+    call parser_parse_instruction_two_args
+    ret
+endp parser_parse_filledrect
+
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
 instruction_ptr = bp - 2
@@ -3346,6 +3360,9 @@ proc parser_parse_instruction
     test ax, ax
     jnz parsed_instruction
     call parser_parse_rect
+    test ax, ax
+    jnz parsed_instruction
+    call parser_parse_filledrect
     test ax, ax
     jnz parsed_instruction
 
@@ -5601,13 +5618,14 @@ proc instruction_yline_execute
 endp instruction_yline_execute
 
 instruction_ptr = bp + 4
+exec_func = bp + 6
 arg1_value = bp - 2
 arg2_value = bp - 4
 start_x = bp - 6
 start_y = bp - 8
 rect_width = bp - 10
 rect_height = bp - 12
-proc instruction_rect_execute
+proc instruction_rectangular_execute
     push bp
     mov bp, sp
     sub sp, 8
@@ -5663,7 +5681,8 @@ proc instruction_rect_execute
     push [rect_width]
     push [start_y]
     push [start_x]
-    call graphics_show_rect
+    mov ax, [exec_func]
+    call ax
 
     jmp @@end_execute
 
@@ -5695,8 +5714,34 @@ proc instruction_rect_execute
     pop ax
     add sp, 8
     pop bp
+    ret 4
+endp instruction_rectangular_execute
+
+instruction_ptr = bp + 4
+proc instruction_rect_execute
+    push bp
+    mov bp, sp
+
+    push offset graphics_show_rect
+    push [instruction_ptr]
+    call instruction_rectangular_execute
+
+    pop bp
     ret 2
 endp instruction_rect_execute
+
+instruction_ptr = bp + 4
+proc instruction_filledrect_execute
+    push bp
+    mov bp, sp
+
+    push offset graphics_show_filledrect
+    push [instruction_ptr]
+    call instruction_rectangular_execute
+
+    pop bp
+    ret 2
+endp instruction_filledrect_execute
 
 instruction_ptr = bp + 4
 proc instruction_execute
@@ -5724,6 +5769,8 @@ proc instruction_execute
     je @@choice_yline
     cmp al, INSTRUCTION_TYPE_RECT
     je @@choice_rect
+    cmp al, INSTRUCTION_TYPE_FILLEDRECT
+    je @@choice_filledrect
 
     ; If we matched nothing
     call panic
@@ -5756,6 +5803,10 @@ proc instruction_execute
 
 @@choice_rect:
     mov ax, offset instruction_rect_execute
+    jmp @@end_choice
+
+@@choice_filledrect:
+    mov ax, offset instruction_filledrect_execute
 
 @@end_choice:
 
@@ -6165,6 +6216,62 @@ proc graphics_show_rect
     pop bp
     ret 8
 endp graphics_show_rect
+
+; Show filled rectangle
+start_x = bp + 4
+start_y = bp + 6
+rect_width = bp + 8
+rect_height = bp + 10
+proc graphics_show_filledrect
+    push bp
+    mov bp, sp
+    push ax
+    push cx
+
+    ; Decide which function to call for better speed
+    mov ax, [rect_width]
+    cmp ax, [rect_height]
+    jl @@draw_by_width
+
+    mov cx, 0
+@@draw_vertical:
+    cmp cx, [rect_width]
+    je @@end_draw
+
+    push [rect_height]
+    push [start_y]
+    mov ax, [start_x]
+    add ax, cx
+    push ax
+    call graphics_show_yline
+
+    inc cx
+    jmp @@draw_vertical
+
+@@draw_by_width:
+
+    mov cx, 0
+@@draw_horizontal:
+    cmp cx, [rect_height]
+    je @@end_draw
+
+    push [rect_width]
+    mov ax, [start_y]
+    add ax, cx
+    push ax
+    push [start_x]
+    call graphics_show_xline
+
+    inc cx
+    jmp @@draw_horizontal
+
+@@end_draw:
+
+    pop cx
+    pop ax
+    pop bp
+    ret 8
+endp graphics_show_filledrect
 
 start:
     mov ax, @data
