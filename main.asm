@@ -47,6 +47,7 @@ DATASEG
     TOKEN_TYPE_COMMA = 27
     TOKEN_TYPE_STRING = 28
     TOKEN_TYPE_XLINE = 29
+    TOKEN_TYPE_YLINE = 30
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -60,8 +61,9 @@ DATASEG
     keyword_else db TOKEN_TYPE_ELSE, 4, "else"
     keyword_loop db TOKEN_TYPE_LOOP, 4, "loop"
     keyword_xline db TOKEN_TYPE_XLINE, 5, "xline"
-    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop, offset keyword_xline
-    AMOUNT_KEYWORDS = 5
+    keyword_yline db TOKEN_TYPE_YLINE, 5, "yline"
+    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop, offset keyword_xline, offset keyword_yline
+    AMOUNT_KEYWORDS = 6
 
     single_byte_tokens db TOKEN_TYPE_EQU, '='
                        db TOKEN_TYPE_PLUS, '+'
@@ -136,6 +138,7 @@ DATASEG
     INSTRUCTION_TYPE_IF = 3
     INSTRUCTION_TYPE_LOOP = 4
     INSTRUCTION_TYPE_XLINE = 5
+    INSTRUCTION_TYPE_YLINE = 6
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -152,8 +155,8 @@ DATASEG
     INSTRUCTION_LOOP_OFF_EXPR = 1
     INSTRUCTION_LOOP_OFF_BLOCK = 3
 
-    INSTRUCTION_XLINE_OFF_ARG1 = 1
-    INSTRUCTION_XLINE_OFF_ARG2 = 3
+    INSTRUCTION_LINE_OFF_ARG1 = 1
+    INSTRUCTION_LINE_OFF_ARG2 = 3
 
     INSTRUCTION_MAX_SIZE = 7
 
@@ -251,6 +254,9 @@ DATASEG
     amount_variables db 0
     ; Interpreter currently used color
     graphics_color db 0Fh
+
+    GRAPHICS_SCREEN_WIDTH = 320
+    GRAPHICS_SCREEN_HEIGHT = 200
 
     ; Error related stuff
     file_error_line_message db " [line ", 0
@@ -2041,7 +2047,9 @@ proc instruction_delete
     cmp al, INSTRUCTION_TYPE_LOOP
     je @@choice_loop
     cmp al, INSTRUCTION_TYPE_XLINE
-    je @@choice_xline
+    je @@choice_line
+    cmp al, INSTRUCTION_TYPE_YLINE
+    je @@choice_line
 
     ; If we got here we might not need to delete it
     jmp @@choice_end
@@ -2079,10 +2087,10 @@ proc instruction_delete
     call block_delete
     jmp @@choice_end
 
-@@choice_xline:
-    push [es:INSTRUCTION_XLINE_OFF_ARG1]
+@@choice_line:
+    push [es:INSTRUCTION_LINE_OFF_ARG1]
     call expr_delete
-    push [es:INSTRUCTION_XLINE_OFF_ARG2]
+    push [es:INSTRUCTION_LINE_OFF_ARG2]
     call expr_delete
 
 @@choice_end:
@@ -3219,16 +3227,18 @@ proc parser_parse_loop
     ret
 endp parser_parse_loop
 
-; Parse the xline instruction
+; Parse an instruction with a vector and a number as parameters
+start_token = bp + 4
+instruction_type = bp + 6
 arg1 = bp - 2
 arg2 = bp - 4
-proc parser_parse_xline
+proc parser_parse_instruction_line
     push bp
     mov bp, sp
     sub sp, 4
     push es
 
-    push TOKEN_TYPE_XLINE
+    push [start_token]
     call parser_match
     test ax, ax
     jz @@parse_failed
@@ -3249,14 +3259,14 @@ proc parser_parse_xline
     mov [arg2], ax
 
     ; If we got here, we parsed the instruction
-    push INSTRUCTION_TYPE_XLINE
+    push [instruction_type]
     call instruction_new
     mov es, ax
 
     mov ax, [arg1]
-    mov [es:INSTRUCTION_XLINE_OFF_ARG1], ax
+    mov [es:INSTRUCTION_LINE_OFF_ARG1], ax
     mov ax, [arg2]
-    mov [es:INSTRUCTION_XLINE_OFF_ARG2], ax
+    mov [es:INSTRUCTION_LINE_OFF_ARG2], ax
 
     mov ax, es
     jmp @@end_parse
@@ -3280,8 +3290,22 @@ proc parser_parse_xline
     pop es
     add sp, 4
     pop bp
+    ret 4
+endp parser_parse_instruction_line
+
+proc parser_parse_xline
+    push INSTRUCTION_TYPE_XLINE
+    push TOKEN_TYPE_XLINE
+    call parser_parse_instruction_line
     ret
 endp parser_parse_xline
+
+proc parser_parse_yline
+    push INSTRUCTION_TYPE_YLINE
+    push TOKEN_TYPE_YLINE
+    call parser_parse_instruction_line
+    ret
+endp parser_parse_yline
 
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
@@ -3304,6 +3328,9 @@ proc parser_parse_instruction
     test ax, ax
     jnz parsed_instruction
     call parser_parse_xline
+    test ax, ax
+    jnz parsed_instruction
+    call parser_parse_yline
     test ax, ax
     jnz parsed_instruction
 
@@ -5404,10 +5431,13 @@ proc instruction_loop_execute
 endp instruction_loop_execute
 
 instruction_ptr = bp + 4
+exec_func = bp + 6
 arg1_value = bp - 2
 arg2_value = bp - 4
-line_length = bp - 6
-proc instruction_xline_execute
+start_x = bp - 6
+start_y = bp - 8
+line_length = bp - 10
+proc instruction_line_execute
     push bp
     mov bp, sp
     sub sp, 6
@@ -5418,11 +5448,11 @@ proc instruction_xline_execute
     mov es, ax
 
     ; Eval first argument
-    push [es:INSTRUCTION_XLINE_OFF_ARG1]
+    push [es:INSTRUCTION_LINE_OFF_ARG1]
     call expr_eval
     mov [arg1_value], ax
     ; Eval second argument
-    push [es:INSTRUCTION_XLINE_OFF_ARG2]
+    push [es:INSTRUCTION_LINE_OFF_ARG2]
     call expr_eval
     mov [arg2_value], ax
 
@@ -5451,10 +5481,11 @@ proc instruction_xline_execute
     mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
     mov [line_length], ax
 
+    mov ax, [exec_func]
     push [line_length]
     push [start_y]
     push [start_x]
-    call graphic_show_xline
+    call ax
 
     jmp @@end_execute
 
@@ -5462,7 +5493,7 @@ proc instruction_xline_execute
     ; Set es to arg1 expr
     mov ax, [instruction_ptr]
     mov es, ax
-    mov ax, [es:INSTRUCTION_XLINE_OFF_ARG1]
+    mov ax, [es:INSTRUCTION_LINE_OFF_ARG1]
     mov es, ax
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
@@ -5473,7 +5504,7 @@ proc instruction_xline_execute
     ; Set es to arg2 expr
     mov ax, [instruction_ptr]
     mov es, ax
-    mov ax, [es:INSTRUCTION_XLINE_OFF_ARG1]
+    mov ax, [es:INSTRUCTION_LINE_OFF_ARG1]
     mov es, ax
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
@@ -5486,8 +5517,34 @@ proc instruction_xline_execute
     pop ax
     add sp, 6
     pop bp
+    ret 4
+endp instruction_line_execute
+
+instruction_ptr = bp + 4
+proc instruction_xline_execute
+    push bp
+    mov bp, sp
+
+    push offset graphic_show_xline
+    push [instruction_ptr]
+    call instruction_line_execute
+
+    pop bp
     ret 2
 endp instruction_xline_execute
+
+instruction_ptr = bp + 4
+proc instruction_yline_execute
+    push bp
+    mov bp, sp
+
+    push offset graphic_show_yline
+    push [instruction_ptr]
+    call instruction_line_execute
+
+    pop bp
+    ret 2
+endp instruction_yline_execute
 
 instruction_ptr = bp + 4
 proc instruction_execute
@@ -5502,46 +5559,51 @@ proc instruction_execute
     mov al, [es:INSTRUCTION_OFF_TYPE]
 
     cmp al, INSTRUCTION_TYPE_ASSIGN
-    je choice_instruction_assign
+    je @@choice_assign
     cmp al, INSTRUCTION_TYPE_SHOW
-    je choice_instruction_show
+    je @@choice_show
     cmp al, INSTRUCTION_TYPE_IF
-    je choice_instruction_if
+    je @@choice_if
     cmp al, INSTRUCTION_TYPE_LOOP
-    je choice_instruction_loop
+    je @@choice_loop
     cmp al, INSTRUCTION_TYPE_XLINE
-    je choice_instruction_xline
+    je @@choice_xline
+    cmp al, INSTRUCTION_TYPE_YLINE
+    je @@choice_yline
 
     ; If we matched nothing
     call panic
 
-    jmp end_instruction_choice
+    jmp @@end_choice
 
-choice_instruction_assign:
+@@choice_assign:
+    mov ax, offset instruction_assign_execute
+    jmp @@end_choice
+
+@@choice_show:
+    mov ax, offset instruction_show_execute
+    jmp @@end_choice
+
+@@choice_if:
+    mov ax, offset instruction_if_execute
+    jmp @@end_choice
+
+@@choice_loop:
+    mov ax, offset instruction_loop_execute
+    jmp @@end_choice
+
+@@choice_xline:
+    mov ax, offset instruction_xline_execute
+    jmp @@end_choice
+
+@@choice_yline:
+    mov ax, offset instruction_yline_execute
+
+@@end_choice:
+
+    ; Execute the instruction
     push es
-    call instruction_assign_execute
-    jmp end_instruction_choice
-
-choice_instruction_show:
-    push es
-    call instruction_show_execute
-    jmp end_instruction_choice
-
-choice_instruction_if:
-    push es
-    call instruction_if_execute
-    jmp end_instruction_choice
-
-choice_instruction_loop:
-    push es
-    call instruction_loop_execute
-    jmp end_instruction_choice
-
-choice_instruction_xline:
-    push es
-    call instruction_xline_execute
-
-end_instruction_choice:
+    call ax
 
     pop es
     pop ax
@@ -5832,6 +5894,48 @@ proc graphic_show_xline
     pop bp
     ret 6
 endp graphic_show_xline
+
+start_x = bp + 4
+start_y = bp + 6
+line_length = bp + 8
+proc graphic_show_yline
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push dx
+    push es
+
+    mov ax, 0A000h
+    mov es, ax
+
+    xor dx, dx
+    mov ax, [start_x]
+    mov bx, [start_y]
+    mul bx
+    mov bx, ax
+
+    mov ax, 0
+@@loop_line:
+    cmp ax, [line_length]
+    je @@end_loop_line
+
+    mov dl, [graphics_color]
+    mov [es:bx], dl
+
+    inc ax
+    add bx, GRAPHICS_SCREEN_WIDTH
+    jmp @@loop_line
+
+@@end_loop_line:
+
+    pop es
+    pop dx
+    pop bx
+    pop ax
+    pop bp
+    ret 6
+endp graphic_show_yline
 
 start:
     mov ax, @data
