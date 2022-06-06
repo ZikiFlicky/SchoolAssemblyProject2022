@@ -50,6 +50,7 @@ DATASEG
     TOKEN_TYPE_YLINE = 30
     TOKEN_TYPE_RECT = 31
     TOKEN_TYPE_FILLEDRECT = 32
+    TOKEN_TYPE_SETCOLOR = 33
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -66,10 +67,11 @@ DATASEG
     keyword_yline db TOKEN_TYPE_YLINE, 5, "yline"
     keyword_rect db TOKEN_TYPE_RECT, 4, "rect"
     keyword_filledrect db TOKEN_TYPE_FILLEDRECT, 10, "filledrect"
+    keyword_setcolor db TOKEN_TYPE_SETCOLOR, 8, "setcolor"
     keywords dw offset keyword_show, offset keyword_if, offset keyword_else
              dw offset keyword_loop, offset keyword_xline, offset keyword_yline
-             dw offset keyword_rect, offset keyword_filledrect
-    AMOUNT_KEYWORDS = 8
+             dw offset keyword_rect, offset keyword_filledrect, offset keyword_setcolor
+    AMOUNT_KEYWORDS = 9
 
     single_byte_tokens db TOKEN_TYPE_EQU, '='
                        db TOKEN_TYPE_PLUS, '+'
@@ -147,6 +149,7 @@ DATASEG
     INSTRUCTION_TYPE_YLINE = 6
     INSTRUCTION_TYPE_RECT = 7
     INSTRUCTION_TYPE_FILLEDRECT = 8
+    INSTRUCTION_TYPE_SETCOLOR = 9
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -154,7 +157,7 @@ DATASEG
     INSTRUCTION_ASSIGN_OFF_KEY = 1
     INSTRUCTION_ASSIGN_OFF_EXPR = 3
 
-    INSTRUCTION_SHOW_OFF_EXPR = 1
+    INSTRUCTION_ONE_ARG_OFF_ARG = 1
 
     INSTRUCTION_IF_OFF_EXPR = 1
     INSTRUCTION_IF_OFF_BLOCK = 3
@@ -162,6 +165,8 @@ DATASEG
 
     INSTRUCTION_LOOP_OFF_EXPR = 1
     INSTRUCTION_LOOP_OFF_BLOCK = 3
+
+    INSTRUCTION_ONE_ARG_OFF_ARG = 1
 
     INSTRUCTION_TWO_ARGS_OFF_ARG1 = 1
     INSTRUCTION_TWO_ARGS_OFF_ARG2 = 3
@@ -2048,8 +2053,6 @@ proc instruction_delete
     ; Remove contents by type
     cmp al, INSTRUCTION_TYPE_ASSIGN
     je @@choice_assign
-    cmp al, INSTRUCTION_TYPE_SHOW
-    je @@choice_show
     cmp al, INSTRUCTION_TYPE_IF
     je @@choice_if
     cmp al, INSTRUCTION_TYPE_LOOP
@@ -2062,6 +2065,10 @@ proc instruction_delete
     je @@choice_two_args
     cmp al, INSTRUCTION_TYPE_FILLEDRECT
     je @@choice_two_args
+    cmp al, INSTRUCTION_TYPE_SHOW
+    je @@choice_one_arg
+    cmp al, INSTRUCTION_TYPE_SETCOLOR
+    je @@choice_one_arg
 
     ; If we got here we might not need to delete it
     jmp @@choice_end
@@ -2070,11 +2077,6 @@ proc instruction_delete
     push [es:INSTRUCTION_ASSIGN_OFF_KEY]
     call heap_free
     push [es:INSTRUCTION_ASSIGN_OFF_EXPR]
-    call expr_delete
-    jmp @@choice_end
-
-@@choice_show:
-    push [es:INSTRUCTION_SHOW_OFF_EXPR]
     call expr_delete
     jmp @@choice_end
 
@@ -2103,6 +2105,11 @@ proc instruction_delete
     push [es:INSTRUCTION_TWO_ARGS_OFF_ARG1]
     call expr_delete
     push [es:INSTRUCTION_TWO_ARGS_OFF_ARG2]
+    call expr_delete
+    jmp @@choice_end
+
+@@choice_one_arg:
+    push [es:INSTRUCTION_ONE_ARG_OFF_ARG]
     call expr_delete
 
 @@choice_end:
@@ -3039,51 +3046,6 @@ end_parse_assignment:
     ret
 endp parser_parse_assignment
 
-; Parse the SHOW instruction
-expr_ptr = bp - 2
-proc parser_parse_show
-    push bp
-    mov bp, sp
-    sub sp, 2
-    push es
-
-    push TOKEN_TYPE_SHOW
-    call parser_match
-    test ax, ax
-    jz not_parse_show
-
-    call parser_parse_expr
-    test ax, ax
-    jz show_error_no_value
-    mov [expr_ptr], ax
-
-    push INSTRUCTION_TYPE_SHOW
-    call instruction_new
-    mov es, ax
-
-    mov ax, [expr_ptr]
-    mov [es:INSTRUCTION_SHOW_OFF_EXPR], ax
-
-    mov ax, es
-    jmp end_parse_show
-
-show_error_no_value:
-    push [file_idx]
-    push offset parser_error_invalid_token
-    call parser_error
-    jmp end_parse_show
-
-not_parse_show:
-    mov ax, 0
-
-end_parse_show:
-
-    pop es
-    add sp, 2
-    pop bp
-    ret
-endp parser_parse_show
-
 ; Parse the IF instruction
 expr_ptr = bp - 2
 block_ptr = bp - 4
@@ -3239,6 +3201,52 @@ proc parser_parse_loop
     ret
 endp parser_parse_loop
 
+start_token = bp + 4
+instruction_type = bp + 6
+argument = bp - 2
+proc parser_parse_instruction_one_arg
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    push [start_token]
+    call parser_match
+    test ax, ax
+    jz @@parse_failed
+
+    call parser_parse_expr
+    test ax, ax
+    jz @@error_no_arg
+    mov [arg1], ax
+
+    ; If we got here, we parsed the instruction
+    push [instruction_type]
+    call instruction_new
+    mov es, ax
+
+    mov ax, [argument]
+    mov [es:INSTRUCTION_ONE_ARG_OFF_ARG], ax
+
+    mov ax, es
+    jmp @@end_parse
+
+@@error_no_arg:
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@parse_failed:
+    mov ax, 0
+
+@@end_parse:
+
+    pop es
+    add sp, 2
+    pop bp
+    ret 4
+endp parser_parse_instruction_one_arg
+
 ; Parse an instruction with a vector and a number as parameters
 start_token = bp + 4
 instruction_type = bp + 6
@@ -3333,6 +3341,20 @@ proc parser_parse_filledrect
     ret
 endp parser_parse_filledrect
 
+proc parser_parse_show
+    push INSTRUCTION_TYPE_SHOW
+    push TOKEN_TYPE_SHOW
+    call parser_parse_instruction_one_arg
+    ret
+endp parser_parse_show
+
+proc parser_parse_setcolor
+    push INSTRUCTION_TYPE_SETCOLOR
+    push TOKEN_TYPE_SETCOLOR
+    call parser_parse_instruction_one_arg
+    ret
+endp parser_parse_setcolor
+
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
 instruction_ptr = bp - 2
@@ -3342,9 +3364,6 @@ proc parser_parse_instruction
     sub sp, 2
 
     call parser_parse_assignment
-    test ax, ax
-    jnz parsed_instruction
-    call parser_parse_show
     test ax, ax
     jnz parsed_instruction
     call parser_parse_if
@@ -3363,6 +3382,12 @@ proc parser_parse_instruction
     test ax, ax
     jnz parsed_instruction
     call parser_parse_filledrect
+    test ax, ax
+    jnz parsed_instruction
+    call parser_parse_show
+    test ax, ax
+    jnz parsed_instruction
+    call parser_parse_setcolor
     test ax, ax
     jnz parsed_instruction
 
@@ -3805,14 +3830,12 @@ proc object_number_operation
     sub sp, 6
     push es
 
-    mov ax, [lhs_value]
-    mov es, ax
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [lhs_value]
+    call object_number_get
     mov [lhs_number], ax
 
-    mov ax, [rhs_value]
-    mov es, ax
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [rhs_value]
+    call object_number_get
     mov [rhs_number], ax
 
     mov ax, [operator_func]
@@ -3938,15 +3961,12 @@ proc object_number_eq
     sub sp, 4
     push es
 
-    ; TODO: Make this kind of operation a function (like object_number_to_number)
-    mov ax, [lhs_value]
-    mov es, ax
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [lhs_value]
+    call object_number_get
     mov [lhs_number], ax
 
-    mov ax, [rhs_value]
-    mov es, ax
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [rhs_value]
+    call object_number_get
     mov [rhs_number], ax
 
     mov ax, [lhs_number]
@@ -4047,10 +4067,8 @@ proc object_number_neg
     sub sp, 2
     push es
 
-    mov ax, [object_ptr]
-    mov es, ax
-
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [object_ptr]
+    call object_number_get
     neg ax
     mov [neg_number], ax
 
@@ -4075,12 +4093,9 @@ object_ptr = bp + 4
 proc object_number_to_bool
     push bp
     mov bp, sp
-    push es
 
-    mov ax, [object_ptr]
-    mov es, ax
-
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [object_ptr]
+    call object_number_get
     test ax, ax
 
     test ax, ax
@@ -4094,10 +4109,26 @@ proc object_number_to_bool
 
 @@object_check_end:
 
-    pop es
     pop bp
     ret 2
 endp object_number_to_bool
+
+; Returns the word stored in the number object
+object_ptr = bp + 4
+proc object_number_get
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+
+    pop es
+    pop bp
+    ret 2
+endp object_number_get
 
 ; String object
 
@@ -4233,29 +4264,26 @@ proc object_vector_show
     push bp
     mov bp, sp
     push ax
-    push dx
-    push es
-
-    mov ax, [object_ptr]
-    mov es, ax
 
     push offset vector_print_start
     call print_nul_terminated_string
 
-    push [es:OBJECT_VECTOR_OFF_X]
+    push [object_ptr]
+    call object_vector_get_x
+    push ax
     call print_word
 
     push offset vector_print_middle
     call print_nul_terminated_string
 
-    push [es:OBJECT_VECTOR_OFF_Y]
+    push [object_ptr]
+    call object_vector_get_y
+    push ax
     call print_word
 
     push offset vector_print_end
     call print_nul_terminated_string
 
-    pop es
-    pop dx
     pop ax
     pop bp
     ret 2
@@ -4269,17 +4297,14 @@ proc object_vector_eq
     push bp
     mov bp, sp
     sub sp, 4
-    push es
 
     ; Store x of lhs
-    mov ax, [lhs_ptr]
-    mov es, ax
-    mov ax, [es:OBJECT_VECTOR_OFF_X]
+    push [lhs_ptr]
+    call object_vector_get_x
     mov [lhs_number], ax
     ; Store x of rhs
-    mov ax, [rhs_ptr]
-    mov es, ax
-    mov ax, [es:OBJECT_VECTOR_OFF_X]
+    push [rhs_ptr]
+    call object_vector_get_x
     mov [rhs_number], ax
 
     mov ax, [lhs_number]
@@ -4287,14 +4312,12 @@ proc object_vector_eq
     jne @@not_equal
 
     ; Store y of lhs
-    mov ax, [lhs_ptr]
-    mov es, ax
-    mov ax, [es:OBJECT_VECTOR_OFF_Y]
+    push [lhs_ptr]
+    call object_vector_get_y
     mov [lhs_number], ax
     ; Store y of rhs
-    mov ax, [rhs_ptr]
-    mov es, ax
-    mov ax, [es:OBJECT_VECTOR_OFF_Y]
+    push [rhs_ptr]
+    call object_vector_get_y
     mov [rhs_number], ax
 
     mov ax, [lhs_number]
@@ -4310,7 +4333,6 @@ proc object_vector_eq
 
 @@end_equality_check:
 
-    pop es
     add sp, 4
     pop bp
     ret 4
@@ -5135,14 +5157,16 @@ proc expr_vector_eval
     mov es, ax
     cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
     jne @@x_not_number
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [x_value]
+    call object_number_get
     mov [x_number], ax
 
     mov ax, [y_value]
     mov es, ax
     cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
     jne @@y_not_number
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [y_value]
+    call object_number_get
     mov [y_number], ax
 
     ; Create a value
@@ -5358,51 +5382,6 @@ proc instruction_assign_execute
     ret 2
 endp instruction_assign_execute
 
-instruction_ptr = bp + 4
-proc instruction_show_execute
-    push bp
-    mov bp, sp
-    push ax
-    push bx
-    push es
-
-    mov ax, [instruction_ptr]
-    mov es, ax
-
-    ; Eval expr and return value into ax
-    push [es:INSTRUCTION_SHOW_OFF_EXPR]
-    call expr_eval
-    mov es, ax
-
-    mov bx, [es:OBJECT_OFF_TYPE]
-
-    mov ax, [bx + OBJECT_TYPE_OFF_FN_SHOW]
-    test ax, ax
-    jnz @@end_show
-
-    ; If we don't have a SHOW function defined
-    call panic
-
-@@end_show:
-
-    ; Call the show function
-    push es
-    call ax
-
-    ; Show newline after the print
-    call print_newline
-
-    ; Dereference the object
-    push es
-    call object_deref
-
-    pop es
-    pop bx
-    pop ax
-    pop bp
-    ret 2
-endp instruction_show_execute
-
 instrcution_ptr = bp + 4
 evaluated_object = bp - 2
 proc instruction_if_execute
@@ -5535,16 +5514,15 @@ proc instruction_line_execute
 
     ; FIXME: Verify both args are valid not just in type but also in value
 
-    mov ax, [arg1_value]
-    mov es, ax
-    mov ax, [es:OBJECT_VECTOR_OFF_X]
+    push [arg1_value]
+    call object_vector_get_x
     mov [start_x], ax
-    mov ax, [es:OBJECT_VECTOR_OFF_Y]
+    push [arg1_value]
+    call object_vector_get_y
     mov [start_y], ax
 
-    mov ax, [arg2_value]
-    mov es, ax
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [arg2_value]
+    call object_number_get
     mov [line_length], ax
 
     push [arg1_value]
@@ -5744,6 +5722,99 @@ proc instruction_filledrect_execute
 endp instruction_filledrect_execute
 
 instruction_ptr = bp + 4
+proc instruction_show_execute
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    ; Eval expr and return value into ax
+    push [es:INSTRUCTION_ONE_ARG_OFF_ARG]
+    call expr_eval
+    mov es, ax
+
+    mov bx, [es:OBJECT_OFF_TYPE]
+
+    mov ax, [bx + OBJECT_TYPE_OFF_FN_SHOW]
+    test ax, ax
+    jnz @@end_show
+
+    ; If we don't have a SHOW function defined
+    call panic
+
+@@end_show:
+
+    ; Call the show function
+    push es
+    call ax
+
+    ; Show newline after the print
+    call print_newline
+
+    ; Dereference the object
+    push es
+    call object_deref
+
+    pop es
+    pop bx
+    pop ax
+    pop bp
+    ret 2
+endp instruction_show_execute
+
+instruction_ptr = bp + 4
+arg_ptr = bp - 2
+proc instruction_setcolor_execute
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    push [es:INSTRUCTION_ONE_ARG_OFF_ARG]
+    call expr_eval
+    mov [arg_ptr], ax
+    mov es, ax ; Store the argument object segment
+    ; Verify the object is a number
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
+    jne @@arg_not_number
+    ; Get the actual number from the object
+    push ax
+    call object_number_get
+
+    ; FIXME: Check if the number is in range of possible values (between 0 and 15)
+    mov [graphics_color], al
+
+    jmp @@end_execute
+
+@@arg_not_number:
+    mov ax, [instruction_ptr]
+    mov es, ax
+    mov ax, [es:INSTRUCTION_ONE_ARG_OFF_ARG]
+    mov es, ax
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_expected_number
+    call interpreter_runtime_error
+
+@@end_execute:
+    push [arg_ptr]
+    call object_deref
+
+    pop es
+    pop ax
+    add sp, 2
+    pop bp
+    ret 2
+endp instruction_setcolor_execute
+
+instruction_ptr = bp + 4
 proc instruction_execute
     push bp
     mov bp, sp
@@ -5757,8 +5828,6 @@ proc instruction_execute
 
     cmp al, INSTRUCTION_TYPE_ASSIGN
     je @@choice_assign
-    cmp al, INSTRUCTION_TYPE_SHOW
-    je @@choice_show
     cmp al, INSTRUCTION_TYPE_IF
     je @@choice_if
     cmp al, INSTRUCTION_TYPE_LOOP
@@ -5771,6 +5840,10 @@ proc instruction_execute
     je @@choice_rect
     cmp al, INSTRUCTION_TYPE_FILLEDRECT
     je @@choice_filledrect
+    cmp al, INSTRUCTION_TYPE_SHOW
+    je @@choice_show
+    cmp al, INSTRUCTION_TYPE_SETCOLOR
+    je @@choice_setcolor
 
     ; If we matched nothing
     call panic
@@ -5779,10 +5852,6 @@ proc instruction_execute
 
 @@choice_assign:
     mov ax, offset instruction_assign_execute
-    jmp @@end_choice
-
-@@choice_show:
-    mov ax, offset instruction_show_execute
     jmp @@end_choice
 
 @@choice_if:
@@ -5807,6 +5876,14 @@ proc instruction_execute
 
 @@choice_filledrect:
     mov ax, offset instruction_filledrect_execute
+    jmp @@end_choice
+
+@@choice_show:
+    mov ax, offset instruction_show_execute
+    jmp @@end_choice
+
+@@choice_setcolor:
+    mov ax, offset instruction_setcolor_execute
 
 @@end_choice:
 
