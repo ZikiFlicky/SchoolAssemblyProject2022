@@ -3800,17 +3800,13 @@ proc object_number_show
     push bp
     mov bp, sp
     push ax
-    push es
 
-    mov ax, [object_ptr]
-    mov es, ax
-
-    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    push [object_ptr]
+    call object_number_get
 
     push ax
     call print_word
 
-    pop es
     pop ax
     pop bp
     ret 2
@@ -3838,21 +3834,15 @@ proc object_number_operation
     call object_number_get
     mov [rhs_number], ax
 
+    ; Call the operator function
     mov ax, [operator_func]
     push [expr_ptr]
     push [rhs_number]
     push [lhs_number]
     call ax
-    mov [result], ax
-
-    ; Create a number object with the new value
-    push offset object_number_type
-    call object_new
-    mov es, ax
-    mov ax, [result]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
-    ; Return the number object
-    mov ax, es
+    ; Create a number from the return value
+    push ax
+    call object_number_new
 
     pop es
     add sp, 6
@@ -4060,30 +4050,19 @@ proc object_number_bigger_eq
 endp object_number_bigger_eq
 
 object_ptr = bp + 4
-neg_number = bp - 2
 proc object_number_neg
     push bp
     mov bp, sp
-    sub sp, 2
     push es
 
     push [object_ptr]
     call object_number_get
     neg ax
-    mov [neg_number], ax
-
-    push offset object_number_type
-    call object_new
-    mov es, ax
-
-    mov ax, [neg_number]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
-
-    ; To return the new number object
-    mov ax, es
+    ; Create a number from the negative number
+    push ax
+    call object_number_new
 
     pop es
-    add sp, 2
     pop bp
     ret 2
 endp object_number_neg
@@ -4129,6 +4108,30 @@ proc object_number_get
     pop bp
     ret 2
 endp object_number_get
+
+; Create a new number with the given word
+number = bp + 4
+proc object_number_new
+    push bp
+    mov bp, sp
+    push es
+
+    ; Move the new object pointer to es
+    push offset object_number_type
+    call object_new
+    mov es, ax
+
+    ; Set the given value as the object's value
+    mov ax, [number]
+    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+
+    ; Return the object
+    mov ax, es
+
+    pop es
+    pop bp
+    ret 2
+endp object_number_new
 
 ; String object
 
@@ -4520,35 +4523,20 @@ proc object_to_bool
 endp object_to_bool
 
 expr_ptr = bp + 4
-number = bp - 2
 proc expr_number_eval
     push bp
     mov bp, sp
-    sub sp, 2
     push es
 
     ; Store the expr segment
     mov ax, [expr_ptr]
     mov es, ax
 
-    ; Store the number
-    mov ax, [es:EXPR_NUMBER_OFF_NUMBER]
-    mov [number], ax
-
-    ; Create a value
-    push offset object_number_type
-    call object_new
-    mov es, ax
-
-    ; Set the value's number
-    mov ax, [number]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
-
-    ; Set ax to new value so we can return it
-    mov ax, es
+    ; Create the number object
+    push [es:EXPR_NUMBER_OFF_NUMBER]
+    call object_number_new
 
     pop es
-    add sp, 2
     pop bp
     ret 2
 endp expr_number_eval
@@ -4764,11 +4752,10 @@ endp expr_neg_eval
 expr_ptr = bp + 4
 lhs_value = bp - 2
 rhs_value = bp - 4
-result = bp - 6
 proc expr_cmp_equals_eval
     push bp
     mov bp, sp
-    sub sp, 6
+    sub sp, 4
     push es
 
     mov ax, [expr_ptr]
@@ -4782,18 +4769,13 @@ proc expr_cmp_equals_eval
     push [es:EXPR_BINARY_OFF_RHS]
     call expr_eval
     mov [rhs_value], ax
-
+    ; Check if the objects are equal
     push [rhs_value]
     push [lhs_value]
     call object_eq
-    mov [result], ax
-
-    push offset object_number_type
-    call object_new
-    mov es, ax
-
-    mov ax, [result]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+    ; Create a number from the return value
+    push ax
+    call object_number_new ; The return value of this is the return value of this procedure
 
     ; Deref evaluated values
     push [lhs_value]
@@ -4801,11 +4783,8 @@ proc expr_cmp_equals_eval
     push [rhs_value]
     call object_deref
 
-    ; To return
-    mov ax, es
-
     pop es
-    add sp, 6
+    add sp, 4
     pop bp
     ret 2
 endp expr_cmp_equals_eval
@@ -4847,21 +4826,15 @@ proc expr_cmp_not_equal_eval
 
 @@end_check:
 
-    push offset object_number_type
-    call object_new
-    mov es, ax
-
-    mov ax, [result]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
+    ; The return value of this is the return value of this procedure
+    push [result]
+    call object_number_new
 
     ; Deref evaluated values
     push [lhs_value]
     call object_deref
     push [rhs_value]
     call object_deref
-
-    ; To return
-    mov ax, es
 
     pop es
     add sp, 6
@@ -4964,16 +4937,9 @@ proc expr_and_eval
     push [lhs_ptr]
     call object_deref
 
-    ; Create a boolean-like number
-    push offset object_number_type
-    call object_new
-    mov es, ax
-
-    mov ax, [boolean_value]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
-
-    ; To return the new object
-    mov ax, es
+    ; Return the boolean value as a number object
+    push [boolean_value]
+    call object_number_new
 
     pop es
     add sp, 6
@@ -5029,16 +4995,9 @@ proc expr_or_eval
     push [lhs_ptr]
     call object_deref
 
-    ; Create a boolean-like number
-    push offset object_number_type
-    call object_new
-    mov es, ax
-
-    mov ax, [boolean_value]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
-
-    ; To return the new object
-    mov ax, es
+    ; Return the boolean as an object
+    push [boolean_value]
+    call object_number_new
 
     pop es
     add sp, 6
@@ -5076,14 +5035,9 @@ proc expr_not_eval
     push [evaluated_object]
     call object_deref
 
-    push offset object_number_type
-    call object_new
-    mov es, ax
-
-    mov ax, [boolean_value]
-    mov [es:OBJECT_NUMBER_OFF_NUMBER], ax
-
-    mov ax, es
+    ; Return the boolean value as a number object
+    push [boolean_value]
+    call object_number_new
 
     pop es
     add sp, 4
