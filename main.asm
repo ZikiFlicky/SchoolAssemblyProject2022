@@ -6123,7 +6123,6 @@ rect_height = bp + 10
 proc graphics_show_rect
     push bp
     mov bp, sp
-    sub sp, 4
     push ax
 
     ; We still draw the sides
@@ -6163,7 +6162,6 @@ proc graphics_show_rect
 @@end_draw:
 
     pop ax
-    add sp, 4
     pop bp
     ret 8
 endp graphics_show_rect
