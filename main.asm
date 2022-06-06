@@ -48,6 +48,7 @@ DATASEG
     TOKEN_TYPE_STRING = 28
     TOKEN_TYPE_XLINE = 29
     TOKEN_TYPE_YLINE = 30
+    TOKEN_TYPE_RECT = 31
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -62,8 +63,9 @@ DATASEG
     keyword_loop db TOKEN_TYPE_LOOP, 4, "loop"
     keyword_xline db TOKEN_TYPE_XLINE, 5, "xline"
     keyword_yline db TOKEN_TYPE_YLINE, 5, "yline"
-    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop, offset keyword_xline, offset keyword_yline
-    AMOUNT_KEYWORDS = 6
+    keyword_rect db TOKEN_TYPE_RECT, 4, "rect"
+    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop, offset keyword_xline, offset keyword_yline, offset keyword_rect
+    AMOUNT_KEYWORDS = 7
 
     single_byte_tokens db TOKEN_TYPE_EQU, '='
                        db TOKEN_TYPE_PLUS, '+'
@@ -139,6 +141,7 @@ DATASEG
     INSTRUCTION_TYPE_LOOP = 4
     INSTRUCTION_TYPE_XLINE = 5
     INSTRUCTION_TYPE_YLINE = 6
+    INSTRUCTION_TYPE_RECT = 7
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -155,8 +158,8 @@ DATASEG
     INSTRUCTION_LOOP_OFF_EXPR = 1
     INSTRUCTION_LOOP_OFF_BLOCK = 3
 
-    INSTRUCTION_LINE_OFF_ARG1 = 1
-    INSTRUCTION_LINE_OFF_ARG2 = 3
+    INSTRUCTION_TWO_ARGS_OFF_ARG1 = 1
+    INSTRUCTION_TWO_ARGS_OFF_ARG2 = 3
 
     INSTRUCTION_MAX_SIZE = 7
 
@@ -2047,9 +2050,11 @@ proc instruction_delete
     cmp al, INSTRUCTION_TYPE_LOOP
     je @@choice_loop
     cmp al, INSTRUCTION_TYPE_XLINE
-    je @@choice_line
+    je @@choice_two_args
     cmp al, INSTRUCTION_TYPE_YLINE
-    je @@choice_line
+    je @@choice_two_args
+    cmp al, INSTRUCTION_TYPE_RECT
+    je @@choice_two_args
 
     ; If we got here we might not need to delete it
     jmp @@choice_end
@@ -2087,10 +2092,10 @@ proc instruction_delete
     call block_delete
     jmp @@choice_end
 
-@@choice_line:
-    push [es:INSTRUCTION_LINE_OFF_ARG1]
+@@choice_two_args:
+    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG1]
     call expr_delete
-    push [es:INSTRUCTION_LINE_OFF_ARG2]
+    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG2]
     call expr_delete
 
 @@choice_end:
@@ -3232,7 +3237,7 @@ start_token = bp + 4
 instruction_type = bp + 6
 arg1 = bp - 2
 arg2 = bp - 4
-proc parser_parse_instruction_line
+proc parser_parse_instruction_two_args
     push bp
     mov bp, sp
     sub sp, 4
@@ -3264,9 +3269,9 @@ proc parser_parse_instruction_line
     mov es, ax
 
     mov ax, [arg1]
-    mov [es:INSTRUCTION_LINE_OFF_ARG1], ax
+    mov [es:INSTRUCTION_TWO_ARGS_OFF_ARG1], ax
     mov ax, [arg2]
-    mov [es:INSTRUCTION_LINE_OFF_ARG2], ax
+    mov [es:INSTRUCTION_TWO_ARGS_OFF_ARG2], ax
 
     mov ax, es
     jmp @@end_parse
@@ -3291,21 +3296,28 @@ proc parser_parse_instruction_line
     add sp, 4
     pop bp
     ret 4
-endp parser_parse_instruction_line
+endp parser_parse_instruction_two_args
 
 proc parser_parse_xline
     push INSTRUCTION_TYPE_XLINE
     push TOKEN_TYPE_XLINE
-    call parser_parse_instruction_line
+    call parser_parse_instruction_two_args
     ret
 endp parser_parse_xline
 
 proc parser_parse_yline
     push INSTRUCTION_TYPE_YLINE
     push TOKEN_TYPE_YLINE
-    call parser_parse_instruction_line
+    call parser_parse_instruction_two_args
     ret
 endp parser_parse_yline
+
+proc parser_parse_rect
+    push INSTRUCTION_TYPE_RECT
+    push TOKEN_TYPE_RECT
+    call parser_parse_instruction_two_args
+    ret
+endp parser_parse_rect
 
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
@@ -3331,6 +3343,9 @@ proc parser_parse_instruction
     test ax, ax
     jnz parsed_instruction
     call parser_parse_yline
+    test ax, ax
+    jnz parsed_instruction
+    call parser_parse_rect
     test ax, ax
     jnz parsed_instruction
 
@@ -4161,6 +4176,40 @@ proc object_string_to_bool
 endp object_string_to_bool
 
 ; Vector object
+
+; Get the x of the vector
+object_ptr = bp + 4
+proc object_vector_get_x
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_VECTOR_OFF_X]
+
+    pop es
+    pop bp
+    ret 2
+endp object_vector_get_x
+
+; Get the y of the vector
+object_ptr = bp + 4
+proc object_vector_get_y
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [object_ptr]
+    mov es, ax
+
+    mov ax, [es:OBJECT_VECTOR_OFF_Y]
+
+    pop es
+    pop bp
+    ret 2
+endp object_vector_get_y
 
 object_ptr = bp + 4
 proc object_vector_show
@@ -5448,11 +5497,11 @@ proc instruction_line_execute
     mov es, ax
 
     ; Eval first argument
-    push [es:INSTRUCTION_LINE_OFF_ARG1]
+    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG1]
     call expr_eval
     mov [arg1_value], ax
     ; Eval second argument
-    push [es:INSTRUCTION_LINE_OFF_ARG2]
+    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG2]
     call expr_eval
     mov [arg2_value], ax
 
@@ -5498,7 +5547,7 @@ proc instruction_line_execute
     ; Set es to arg1 expr
     mov ax, [instruction_ptr]
     mov es, ax
-    mov ax, [es:INSTRUCTION_LINE_OFF_ARG1]
+    mov ax, [es:INSTRUCTION_TWO_ARGS_OFF_ARG1]
     mov es, ax
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
@@ -5509,7 +5558,7 @@ proc instruction_line_execute
     ; Set es to arg2 expr
     mov ax, [instruction_ptr]
     mov es, ax
-    mov ax, [es:INSTRUCTION_LINE_OFF_ARG1]
+    mov ax, [es:INSTRUCTION_TWO_ARGS_OFF_ARG1]
     mov es, ax
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
@@ -5530,7 +5579,7 @@ proc instruction_xline_execute
     push bp
     mov bp, sp
 
-    push offset graphic_show_xline
+    push offset graphics_show_xline
     push [instruction_ptr]
     call instruction_line_execute
 
@@ -5543,13 +5592,111 @@ proc instruction_yline_execute
     push bp
     mov bp, sp
 
-    push offset graphic_show_yline
+    push offset graphics_show_yline
     push [instruction_ptr]
     call instruction_line_execute
 
     pop bp
     ret 2
 endp instruction_yline_execute
+
+instruction_ptr = bp + 4
+arg1_value = bp - 2
+arg2_value = bp - 4
+start_x = bp - 6
+start_y = bp - 8
+rect_width = bp - 10
+rect_height = bp - 12
+proc instruction_rect_execute
+    push bp
+    mov bp, sp
+    sub sp, 8
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    ; Eval first argument
+    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG1]
+    call expr_eval
+    mov [arg1_value], ax
+    ; Eval second argument
+    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG2]
+    call expr_eval
+    mov [arg2_value], ax
+
+    ; Verify the first argument is a vector
+    mov ax, [arg1_value]
+    mov es, ax
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_vector_type
+    jne @@arg1_not_vector
+    ; Verify the second argument is a number
+    mov ax, [arg2_value]
+    mov es, ax
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_vector_type
+    jne @@arg2_not_vector
+
+    ; FIXME: Verify both args are valid not just in type but also in value
+
+    ; Get the start x and y
+    push [arg1_value]
+    call object_vector_get_x
+    mov [start_x], ax
+    push [arg1_value]
+    call object_vector_get_y
+    mov [start_y], ax
+    ; Get the end x and y
+    push [arg2_value]
+    call object_vector_get_x
+    mov [rect_width], ax
+    push [arg2_value]
+    call object_vector_get_y
+    mov [rect_height], ax
+
+    push [arg1_value]
+    call object_deref
+    push [arg2_value]
+    call object_deref
+
+    push [rect_height]
+    push [rect_width]
+    push [start_y]
+    push [start_x]
+    call graphics_show_rect
+
+    jmp @@end_execute
+
+@@arg1_not_vector:
+    ; Set es to arg1 expr
+    mov ax, [instruction_ptr]
+    mov es, ax
+    mov ax, [es:INSTRUCTION_TWO_ARGS_OFF_ARG1]
+    mov es, ax
+    ; Error
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_expected_vector
+    call interpreter_runtime_error
+
+@@arg2_not_vector:
+    ; Set es to arg2 expr
+    mov ax, [instruction_ptr]
+    mov es, ax
+    mov ax, [es:INSTRUCTION_TWO_ARGS_OFF_ARG2]
+    mov es, ax
+    ; Error
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_expected_vector
+    call interpreter_runtime_error
+
+@@end_execute:
+
+    pop es
+    pop ax
+    add sp, 8
+    pop bp
+    ret 2
+endp instruction_rect_execute
 
 instruction_ptr = bp + 4
 proc instruction_execute
@@ -5575,6 +5722,8 @@ proc instruction_execute
     je @@choice_xline
     cmp al, INSTRUCTION_TYPE_YLINE
     je @@choice_yline
+    cmp al, INSTRUCTION_TYPE_RECT
+    je @@choice_rect
 
     ; If we matched nothing
     call panic
@@ -5603,6 +5752,10 @@ proc instruction_execute
 
 @@choice_yline:
     mov ax, offset instruction_yline_execute
+    jmp @@end_choice
+
+@@choice_rect:
+    mov ax, offset instruction_rect_execute
 
 @@end_choice:
 
@@ -5878,10 +6031,11 @@ proc graphics_convert_position_to_index
     ret 4
 endp graphics_convert_position_to_index
 
+; Show horizontal line
 start_x = bp + 4
 start_y = bp + 6
 line_length = bp + 8
-proc graphic_show_xline
+proc graphics_show_xline
     push bp
     mov bp, sp
     push ax
@@ -5917,12 +6071,13 @@ proc graphic_show_xline
     pop ax
     pop bp
     ret 6
-endp graphic_show_xline
+endp graphics_show_xline
 
+; Show vertical line
 start_x = bp + 4
 start_y = bp + 6
 line_length = bp + 8
-proc graphic_show_yline
+proc graphics_show_yline
     push bp
     mov bp, sp
     push ax
@@ -5958,7 +6113,60 @@ proc graphic_show_yline
     pop ax
     pop bp
     ret 6
-endp graphic_show_yline
+endp graphics_show_yline
+
+; Show non-filled rectangle
+start_x = bp + 4
+start_y = bp + 6
+rect_width = bp + 8
+rect_height = bp + 10
+proc graphics_show_rect
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push ax
+
+    ; We still draw the sides
+    cmp [word ptr rect_width], 0
+    je @@end_draw
+    cmp [word ptr rect_height], 0
+    je @@end_draw
+
+    ; Top
+    push [rect_width]
+    push [start_y]
+    push [start_x]
+    call graphics_show_xline
+    ; Left
+    push [rect_height]
+    push [start_y]
+    push [start_x]
+    call graphics_show_yline
+
+    ; Bottom
+    push [rect_width]
+    mov ax, [start_y]
+    add ax, [rect_height]
+    dec ax
+    push ax ; We need this so we don't have an empty pixel in the bottom right corner
+    push [start_x]
+    call graphics_show_xline
+    ; Right
+    push [rect_height]
+    push [start_y]
+    mov ax, [start_x]
+    add ax, [rect_width]
+    dec ax ; We need this so we don't have an empty pixel in the bottom right corner
+    push ax
+    call graphics_show_yline
+
+@@end_draw:
+
+    pop ax
+    add sp, 4
+    pop bp
+    ret 8
+endp graphics_show_rect
 
 start:
     mov ax, @data
