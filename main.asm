@@ -46,6 +46,7 @@ DATASEG
     TOKEN_TYPE_EXCLAMATION_MARK = 26
     TOKEN_TYPE_COMMA = 27
     TOKEN_TYPE_STRING = 28
+    TOKEN_TYPE_XLINE = 29
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -58,8 +59,9 @@ DATASEG
     keyword_if db TOKEN_TYPE_IF, 2, "if"
     keyword_else db TOKEN_TYPE_ELSE, 4, "else"
     keyword_loop db TOKEN_TYPE_LOOP, 4, "loop"
-    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop
-    AMOUNT_KEYWORDS = 4
+    keyword_xline db TOKEN_TYPE_XLINE, 5, "xline"
+    keywords dw offset keyword_show, offset keyword_if, offset keyword_else, offset keyword_loop, offset keyword_xline
+    AMOUNT_KEYWORDS = 5
 
     single_byte_tokens db TOKEN_TYPE_EQU, '='
                        db TOKEN_TYPE_PLUS, '+'
@@ -133,6 +135,7 @@ DATASEG
     INSTRUCTION_TYPE_SHOW = 2
     INSTRUCTION_TYPE_IF = 3
     INSTRUCTION_TYPE_LOOP = 4
+    INSTRUCTION_TYPE_XLINE = 5
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -148,6 +151,9 @@ DATASEG
 
     INSTRUCTION_LOOP_OFF_EXPR = 1
     INSTRUCTION_LOOP_OFF_BLOCK = 3
+
+    INSTRUCTION_XLINE_OFF_ARG1 = 1
+    INSTRUCTION_XLINE_OFF_ARG2 = 3
 
     INSTRUCTION_MAX_SIZE = 7
 
@@ -243,56 +249,68 @@ DATASEG
     ; FIXME: Allows up to 16 variables
     variables dw 10h * 2 dup(?)
     amount_variables db 0
-
+    ; Interpreter currently used color
+    graphics_color db 0Fh
 
     ; Error related stuff
-    file_error_line_message db " [line $"
-    file_error_column_message db ", column $"
-    file_error_end db "]: $"
-    file_error_code_line_start db "> $"
+    file_error_line_message db " [line ", 0
+    file_error_column_message db ", column ", 0
+    file_error_end db "]: ", 0
+    file_error_code_line_start db "> ", 0
 
 
     ; Lexer error related stuff
-    lexer_error_start db "LexerError$"
-    lexer_error_invalid_token db "Invalid token$"
+    lexer_error_start db "LexerError", 0
+    lexer_error_invalid_token db "Invalid token", 0
 
 
     ; Parser error related stuff
-    parser_error_start db "ParserError$"
-    parser_error_invalid_token db "Invalid token$"
-    parser_error_syntax_error db "Syntax error$"
-    parser_error_expected_newline db "Expected newline$"
-    parser_error_unexpected_newline db "Unxpected newline$"
-    parser_error_number_too_big db "Number too big$"
+    parser_error_start db "ParserError", 0
+    parser_error_invalid_token db "Invalid token", 0
+    parser_error_syntax_error db "Syntax error", 0
+    parser_error_expected_newline db "Expected newline", 0
+    parser_error_unexpected_newline db "Unxpected newline", 0
+    parser_error_unexpected_token db "Unxpected token", 0
+    parser_error_number_too_big db "Number too big", 0
 
 
     ; Interpreter error related stuff
-    runtime_error_no_state_start db "RuntimeError: $"
-    runtime_error_start db "RuntimeError$"
-    runtime_error_variable_not_found db "Variable not found$"
-    runtime_error_not_enough_arguments db "Not enough arguments$"
-    runtime_error_could_not_open_file db "Could not open file$"
-    runtime_error_div_by_zero db "Division by 0$"
-    runtime_error_mul_overflow db "Overflowed beyond 16-bit when multiplying$"
-    runtime_error_invalid_operator_types db "Invalid operator types$"
-    runtime_error_invalid_operator_type db "Invalid operator type$"
-    runtime_error_expected_number db "Expected number$"
+    runtime_error_no_state_start db "RuntimeError: ", 0
+    runtime_error_start db "RuntimeError", 0
+    runtime_error_variable_not_found db "Variable not found", 0
+    runtime_error_not_enough_arguments db "Not enough arguments", 0
+    runtime_error_could_not_open_file db "Could not open file", 0
+    runtime_error_div_by_zero db "Division by 0", 0
+    runtime_error_mul_overflow db "Overflowed beyond 16-bit when multiplying", 0
+    runtime_error_invalid_operator_types db "Invalid operator types", 0
+    runtime_error_invalid_operator_type db "Invalid operator type", 0
+    runtime_error_expected_number db "Expected number", 0
+    runtime_error_expected_vector db "Expected vector", 0
 
 
     ; Panic related stuff
-    panic_message db "* PANIC *", 13, 10, "$"
+    panic_message db "* PANIC *", 0
 CODESEG
 
 ; Misc functions
 
+; Exit with error code 1
+proc exit_fail
+    push ax
+
+    mov ah, 4Ch
+    mov al, 1 ; Return code 1
+    int 21h
+
+    pop ax
+    ret
+endp exit_fail
+
 proc panic
     ; Print panic message
-    mov ah, 09h
-    lea dx, [panic_message]
-    int 21h
-    mov ah, 4Ch
-    mov al, 1 ; Return code 1 = error
-    int 21h
+    push offset panic_message
+    call print_nul_terminated_string
+    call exit_fail
     ; We should never reach this code
     ret
 endp panic
@@ -397,7 +415,8 @@ print_char_loop:
 
     push bx ; Because bx is used for the loop
     mov ah, 0Eh
-    mov bx, 0
+    mov bh, 0
+    mov bl, [graphics_color]
     int 10h
     pop bx
 
@@ -429,7 +448,8 @@ proc print_word
     ; Print the negative sign
     mov ah, 0Eh
     mov al, '-'
-    mov bx, 0
+    mov bh, 0
+    mov bl, [graphics_color]
     int 10h
 
     ; Flip because we want to print the positive after the '-'
@@ -476,7 +496,8 @@ end_divide_number:
     add al, '0'
     ; Print the negative
     mov ah, 0Eh
-    mov bx, 0
+    mov bh, 0
+    mov bl, [graphics_color]
     int 10h
 
     loop print_digit
@@ -590,6 +611,44 @@ end_loop_cstrs:
     ret 4
 endp cstrs_eq
 
+; Setup the screen before erroring
+proc error_setup
+    push ax
+    push bx
+    push dx
+
+    ; Set to text mode
+    mov ah, 0
+    mov al, 03h
+    int 10h
+    ; Return to color white
+    mov [graphics_color], 0Fh
+    ; Set position of cursor to beggining
+    mov ah, 2
+    mov bh, 0
+    mov dh, 0
+    mov dl, 0
+    int 10h
+
+    pop dx
+    pop bx
+    pop ax
+    ret
+endp error_setup
+
+; End execution by waiting for a key press on the escape key
+proc wait_for_user_end_execution
+    push ax
+
+    @@loop_key_wait:
+    call wait_for_key
+    cmp ah, 1 ; If pressed escape exit
+    jne @@loop_key_wait
+
+    pop ax
+    ret
+endp wait_for_user_end_execution
+
 ; Shows an error
 error_start_ptr = bp + 4
 message_ptr = bp + 6
@@ -619,13 +678,11 @@ proc show_file_error
     push [backtrack]
     call file_set_idx
 
-    mov ah, 09h
-    mov dx, [error_start_ptr]
-    int 21h
+    push [error_start_ptr]
+    call print_nul_terminated_string
 
-    mov ah, 09h
-    lea dx, [byte ptr file_error_line_message]
-    int 21h
+    push offset file_error_line_message
+    call print_nul_terminated_string
 
     push [index]
     call file_get_line_col_of_index
@@ -635,26 +692,22 @@ proc show_file_error
     push [line]
     call print_word
 
-    mov ah, 09h
-    lea dx, [byte ptr file_error_column_message]
-    int 21h
+    push offset file_error_column_message
+    call print_nul_terminated_string
 
     push [column]
     call print_word
 
-    mov ah, 09h
-    lea dx, [byte ptr file_error_end]
-    int 21h
+    push offset file_error_end
+    call print_nul_terminated_string
 
     ; Some error message
-    mov ah, 09h
-    mov dx, [message_ptr]
-    int 21h
+    push [message_ptr]
+    call print_nul_terminated_string
     call print_newline
 
-    mov ah, 09h
-    lea dx, [byte ptr file_error_code_line_start]
-    int 21h
+    push offset file_error_code_line_start
+    call print_nul_terminated_string
 
     ; Print rest of line
     mov ax, [index]
@@ -702,7 +755,8 @@ proc print_line_from_index
     ; Put the character
     mov ah, 0Eh
     mov al, [file_read_buffer + 0]
-    mov bx, 0
+    mov bh, 0
+    mov bl, [graphics_color]
     int 10h
 
     jmp @@read_line
@@ -719,6 +773,13 @@ proc print_line_from_index
     pop bp
     ret 2
 endp print_line_from_index
+
+; Wait until some key is pressed. Used to exit the interpreter
+proc wait_for_key
+    mov ah, 0
+    int 16h
+    ret
+endp wait_for_key
 
 ; File procedures
 
@@ -1680,15 +1741,17 @@ proc lexer_error
     mov bp, sp
     push ax
 
+    call error_setup
+
     push [index]
     push [message_ptr]
     push offset lexer_error_start
     call show_file_error
 
+    call wait_for_user_end_execution
+
     ; FIXME: We shouldn't exit here, but this is our only way now
-    mov ah, 4Ch
-    mov al, 1
-    int 21h
+    call exit_fail
 
     pop ax
     pop bp
@@ -1977,6 +2040,8 @@ proc instruction_delete
     je @@choice_if
     cmp al, INSTRUCTION_TYPE_LOOP
     je @@choice_loop
+    cmp al, INSTRUCTION_TYPE_XLINE
+    je @@choice_xline
 
     ; If we got here we might not need to delete it
     jmp @@choice_end
@@ -2012,6 +2077,13 @@ proc instruction_delete
     call expr_delete
     push [es:INSTRUCTION_LOOP_OFF_BLOCK]
     call block_delete
+    jmp @@choice_end
+
+@@choice_xline:
+    push [es:INSTRUCTION_XLINE_OFF_ARG1]
+    call expr_delete
+    push [es:INSTRUCTION_XLINE_OFF_ARG2]
+    call expr_delete
 
 @@choice_end:
 
@@ -2032,15 +2104,16 @@ proc parser_error
     mov bp, sp
     push ax
 
+    call error_setup
+
     push [index]
     push [message_ptr]
     push offset parser_error_start
     call show_file_error
 
+    call wait_for_user_end_execution
     ; FIXME: We shouldn't exit here, but this is our only way now
-    mov ah, 4Ch
-    mov al, 1
-    int 21h
+    call exit_fail
 
     pop ax
     pop bp
@@ -3146,6 +3219,70 @@ proc parser_parse_loop
     ret
 endp parser_parse_loop
 
+; Parse the xline instruction
+arg1 = bp - 2
+arg2 = bp - 4
+proc parser_parse_xline
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push es
+
+    push TOKEN_TYPE_XLINE
+    call parser_match
+    test ax, ax
+    jz @@parse_failed
+
+    call parser_parse_expr
+    test ax, ax
+    jz @@error_no_arg1
+    mov [arg1], ax
+
+    push TOKEN_TYPE_COMMA
+    call parser_match
+    test ax, ax
+    jz @@error_no_comma
+
+    call parser_parse_expr
+    test ax, ax
+    jz @@error_no_arg2
+    mov [arg2], ax
+
+    ; If we got here, we parsed the instruction
+    push INSTRUCTION_TYPE_XLINE
+    call instruction_new
+    mov es, ax
+
+    mov ax, [arg1]
+    mov [es:INSTRUCTION_XLINE_OFF_ARG1], ax
+    mov ax, [arg2]
+    mov [es:INSTRUCTION_XLINE_OFF_ARG2], ax
+
+    mov ax, es
+    jmp @@end_parse
+
+@@error_no_comma:
+    push [file_idx]
+    push offset parser_error_unexpected_token
+    call parser_error
+
+@@error_no_arg1:
+@@error_no_arg2:
+    push [file_idx]
+    push offset parser_error_syntax_error
+    call parser_error
+
+@@parse_failed:
+    mov ax, 0
+
+@@end_parse:
+
+    pop es
+    add sp, 4
+    pop bp
+    ret
+endp parser_parse_xline
+
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
 instruction_ptr = bp - 2
@@ -3164,6 +3301,9 @@ proc parser_parse_instruction
     test ax, ax
     jnz parsed_instruction
     call parser_parse_loop
+    test ax, ax
+    jnz parsed_instruction
+    call parser_parse_xline
     test ax, ax
     jnz parsed_instruction
 
@@ -4006,23 +4146,20 @@ proc object_vector_show
     mov ax, [object_ptr]
     mov es, ax
 
-    mov ah, 09h
-    lea dx, [byte ptr vector_print_start]
-    int 21h
+    push offset vector_print_start
+    call print_nul_terminated_string
 
     push [es:OBJECT_VECTOR_OFF_X]
     call print_word
 
-    mov ah, 09h
-    lea dx, [byte ptr vector_print_middle]
-    int 21h
+    push offset vector_print_middle
+    call print_nul_terminated_string
 
     push [es:OBJECT_VECTOR_OFF_Y]
     call print_word
 
-    mov ah, 09h
-    lea dx, [byte ptr vector_print_end]
-    int 21h
+    push offset vector_print_end
+    call print_nul_terminated_string
 
     pop es
     pop dx
@@ -5267,6 +5404,92 @@ proc instruction_loop_execute
 endp instruction_loop_execute
 
 instruction_ptr = bp + 4
+arg1_value = bp - 2
+arg2_value = bp - 4
+line_length = bp - 6
+proc instruction_xline_execute
+    push bp
+    mov bp, sp
+    sub sp, 6
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    ; Eval first argument
+    push [es:INSTRUCTION_XLINE_OFF_ARG1]
+    call expr_eval
+    mov [arg1_value], ax
+    ; Eval second argument
+    push [es:INSTRUCTION_XLINE_OFF_ARG2]
+    call expr_eval
+    mov [arg2_value], ax
+
+    ; Verify the first argument is a vector
+    mov ax, [arg1_value]
+    mov es, ax
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_vector_type
+    jne @@arg1_not_vector
+    ; Verify the second argument is a number
+    mov ax, [arg2_value]
+    mov es, ax
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
+    jne @@arg2_not_number
+
+    ; FIXME: Verify both args are valid not just in type but also in value
+
+    mov ax, [arg1_value]
+    mov es, ax
+    mov ax, [es:OBJECT_VECTOR_OFF_X]
+    mov [start_x], ax
+    mov ax, [es:OBJECT_VECTOR_OFF_Y]
+    mov [start_y], ax
+
+    mov ax, [arg2_value]
+    mov es, ax
+    mov ax, [es:OBJECT_NUMBER_OFF_NUMBER]
+    mov [line_length], ax
+
+    push [line_length]
+    push [start_y]
+    push [start_x]
+    call graphic_show_xline
+
+    jmp @@end_execute
+
+@@arg1_not_vector:
+    ; Set es to arg1 expr
+    mov ax, [instruction_ptr]
+    mov es, ax
+    mov ax, [es:INSTRUCTION_XLINE_OFF_ARG1]
+    mov es, ax
+    ; Error
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_expected_vector
+    call interpreter_runtime_error
+
+@@arg2_not_number:
+    ; Set es to arg2 expr
+    mov ax, [instruction_ptr]
+    mov es, ax
+    mov ax, [es:INSTRUCTION_XLINE_OFF_ARG1]
+    mov es, ax
+    ; Error
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset runtime_error_expected_number
+    call interpreter_runtime_error
+
+@@end_execute:
+
+    pop es
+    pop ax
+    add sp, 6
+    pop bp
+    ret 2
+endp instruction_xline_execute
+
+instruction_ptr = bp + 4
 proc instruction_execute
     push bp
     mov bp, sp
@@ -5286,8 +5509,10 @@ proc instruction_execute
     je choice_instruction_if
     cmp al, INSTRUCTION_TYPE_LOOP
     je choice_instruction_loop
+    cmp al, INSTRUCTION_TYPE_XLINE
+    je choice_instruction_xline
 
-    ; If we got here nothing matched, so we need to panic
+    ; If we matched nothing
     call panic
 
     jmp end_instruction_choice
@@ -5310,6 +5535,11 @@ choice_instruction_if:
 choice_instruction_loop:
     push es
     call instruction_loop_execute
+    jmp end_instruction_choice
+
+choice_instruction_xline:
+    push es
+    call instruction_xline_execute
 
 end_instruction_choice:
 
@@ -5513,6 +5743,8 @@ proc interpreter_runtime_error_no_state
     push cx
     push dx
 
+    call error_setup
+
     ; ParserError:
     mov ah, 09h
     lea dx, [byte ptr runtime_error_no_state_start]
@@ -5523,9 +5755,9 @@ proc interpreter_runtime_error_no_state
     int 21h
     call print_newline
 
+    call wait_for_user_end_execution
     ; FIXME: We shouldn't exit here, but this is our only way now
-    mov ax, 4C00h
-    int 21h
+    call exit_fail
 
     pop dx
     pop cx
@@ -5542,19 +5774,65 @@ proc interpreter_runtime_error
     mov bp, sp
     push ax
 
+    call error_setup
+
     push [index]
     push [message_ptr]
     push offset runtime_error_start
     call show_file_error
 
+    call wait_for_user_end_execution
     ; FIXME: We shouldn't exit here, but this is our only way now
-    mov ax, 4C00h
-    int 21h
+    call exit_fail
 
     pop ax
     pop bp
     ret 4
 endp interpreter_runtime_error
+
+; Graphics related
+
+start_x = bp + 4
+start_y = bp + 6
+line_length = bp + 8
+proc graphic_show_xline
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push dx
+    push es
+
+    mov ax, 0A000h
+    mov es, ax
+
+    xor dx, dx
+    mov ax, [start_x]
+    mov bx, [start_y]
+    mul bx
+    mov bx, ax
+
+    mov ax, 0
+@@loop_line:
+    cmp ax, [line_length]
+    je @@end_loop_line
+
+    mov dl, [graphics_color]
+    mov [es:bx], dl
+
+    inc ax
+    inc bx
+    jmp @@loop_line
+
+@@end_loop_line:
+
+    pop es
+    pop dx
+    pop bx
+    pop ax
+    pop bp
+    ret 6
+endp graphic_show_xline
 
 start:
     mov ax, @data
@@ -5564,6 +5842,10 @@ start:
     mov ax, es
     mov [PSP_segment], ax
 
+    mov ah, 0
+    mov al, 13h
+    int 10h
+
     call open_file
 
     call parser_parse
@@ -5572,7 +5854,15 @@ start:
 
     call close_file
 
-    ; exit
-    mov ax, 4C00h
+    call wait_for_user_end_execution
+
+    ; Set back to text mode
+    mov ah, 0
+    mov al, 03h
+    int 10h
+
+    ; Exit program
+    mov ah, 4Ch
+    mov al, 0
     int 21h
 END start
