@@ -328,7 +328,7 @@ endp exit_fail
 proc panic
     ; Print panic message
     push offset panic_message
-    call print_nul_terminated_string
+    call print_data_cstr
     call exit_fail
     ; We should never reach this code
     ret
@@ -417,20 +417,25 @@ proc print_newline
     ret
 endp print_newline
 
-string_offset = bp + 4
-proc print_nul_terminated_string
+string_segment = bp + 4
+string_offset = bp + 6
+proc print_cstr
     push bp
     mov bp, sp
     push ax
     push bx
+    push es
+
+    mov ax, [string_segment]
+    mov es, ax
 
     mov bx, [string_offset] ; Start index
-print_char_loop:
+@@loop_chars:
     ; Get char
-    mov al, [bx]
+    mov al, [es:bx]
     ; If got terminating NUL, exit loop
     cmp al, 0
-    je end_print_char_loop
+    je @@end_loop_chars
 
     push bx ; Because bx is used for the loop
     mov ah, 0Eh
@@ -440,15 +445,30 @@ print_char_loop:
     pop bx
 
     inc bx
-    jmp print_char_loop
+    jmp @@loop_chars
 
-end_print_char_loop:
+@@end_loop_chars:
 
+    pop es
     pop bx
     pop ax
     pop bp
+    ret 4
+endp print_cstr
+
+; Print cstr from data segment
+string_offset = bp + 4
+proc print_data_cstr
+    push bp
+    mov bp, sp
+
+    push [string_offset]
+    push ds
+    call print_cstr
+
+    pop bp
     ret 2
-endp print_nul_terminated_string
+endp print_data_cstr
 
 word_number = bp + 4
 proc print_word
@@ -698,10 +718,10 @@ proc show_file_error
     call file_set_idx
 
     push [error_start_ptr]
-    call print_nul_terminated_string
+    call print_data_cstr
 
     push offset file_error_line_message
-    call print_nul_terminated_string
+    call print_data_cstr
 
     push [index]
     call file_get_line_col_of_index
@@ -712,21 +732,21 @@ proc show_file_error
     call print_word
 
     push offset file_error_column_message
-    call print_nul_terminated_string
+    call print_data_cstr
 
     push [column]
     call print_word
 
     push offset file_error_end
-    call print_nul_terminated_string
+    call print_data_cstr
 
     ; Some error message
     push [message_ptr]
-    call print_nul_terminated_string
+    call print_data_cstr
     call print_newline
 
     push offset file_error_code_line_start
-    call print_nul_terminated_string
+    call print_data_cstr
 
     ; Print rest of line
     mov ax, [index]
@@ -4165,12 +4185,9 @@ proc object_string_show
     mov ax, [object_ptr]
     mov es, ax
 
-    push ds
-    mov ax, [es:OBJECT_STRING_OFF_SOURCE]
-    mov ds, ax
     push 0
-    call print_nul_terminated_string
-    pop ds
+    push [es:OBJECT_STRING_OFF_SOURCE]
+    call print_cstr
 
     pop es
     pop ax
@@ -4269,7 +4286,7 @@ proc object_vector_show
     push ax
 
     push offset vector_print_start
-    call print_nul_terminated_string
+    call print_data_cstr
 
     push [object_ptr]
     call object_vector_get_x
@@ -4277,7 +4294,7 @@ proc object_vector_show
     call print_word
 
     push offset vector_print_middle
-    call print_nul_terminated_string
+    call print_data_cstr
 
     push [object_ptr]
     call object_vector_get_y
@@ -4285,7 +4302,7 @@ proc object_vector_show
     call print_word
 
     push offset vector_print_end
-    call print_nul_terminated_string
+    call print_data_cstr
 
     pop ax
     pop bp
@@ -5740,7 +5757,7 @@ proc instruction_setcolor_execute
     cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
     jne @@arg_not_number
     ; Get the actual number from the object
-    push ax
+    push es
     call object_number_get
 
     ; FIXME: Check if the number is in range of possible values (between 0 and 15)
@@ -6050,10 +6067,10 @@ proc interpreter_runtime_error_no_state
     ; ParserError:
 
     push offset runtime_error_no_state_start
-    call print_nul_terminated_string
+    call print_data_cstr
     ; Some error message
     push [message_ptr]
-    call print_nul_terminated_string
+    call print_data_cstr
     call print_newline
 
     call wait_for_user_end_execution
