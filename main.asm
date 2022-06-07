@@ -50,7 +50,8 @@ DATASEG
     TOKEN_TYPE_YLINE = 30
     TOKEN_TYPE_RECT = 31
     TOKEN_TYPE_FILLEDRECT = 32
-    TOKEN_TYPE_SETCOLOR = 33
+    TOKEN_TYPE_DIAGONALLINE = 33
+    TOKEN_TYPE_SETCOLOR = 34
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -59,6 +60,7 @@ DATASEG
 
     TOKEN_SIZE = 5
 
+    ; Keyword definitions
     keyword_show db TOKEN_TYPE_SHOW, 4, "show"
     keyword_if db TOKEN_TYPE_IF, 2, "if"
     keyword_else db TOKEN_TYPE_ELSE, 4, "else"
@@ -68,10 +70,12 @@ DATASEG
     keyword_rect db TOKEN_TYPE_RECT, 4, "rect"
     keyword_filledrect db TOKEN_TYPE_FILLEDRECT, 10, "filledrect"
     keyword_setcolor db TOKEN_TYPE_SETCOLOR, 8, "setcolor"
+    keyword_diagonalline db TOKEN_TYPE_DIAGONALLINE, 12, "diagonalline"
     keywords dw offset keyword_show, offset keyword_if, offset keyword_else
              dw offset keyword_loop, offset keyword_xline, offset keyword_yline
              dw offset keyword_rect, offset keyword_filledrect, offset keyword_setcolor
-    AMOUNT_KEYWORDS = 9
+             dw offset keyword_diagonalline
+    AMOUNT_KEYWORDS = 10
 
     single_byte_tokens db TOKEN_TYPE_EQU, '='
                        db TOKEN_TYPE_PLUS, '+'
@@ -149,7 +153,8 @@ DATASEG
     INSTRUCTION_TYPE_YLINE = 6
     INSTRUCTION_TYPE_RECT = 7
     INSTRUCTION_TYPE_FILLEDRECT = 8
-    INSTRUCTION_TYPE_SETCOLOR = 9
+    INSTRUCTION_TYPE_DIAGONALLINE = 9
+    INSTRUCTION_TYPE_SETCOLOR = 10
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -2085,6 +2090,8 @@ proc instruction_delete
     je @@choice_two_args
     cmp al, INSTRUCTION_TYPE_FILLEDRECT
     je @@choice_two_args
+    cmp al, INSTRUCTION_TYPE_DIAGONALLINE
+    je @@choice_two_args
     cmp al, INSTRUCTION_TYPE_SHOW
     je @@choice_one_arg
     cmp al, INSTRUCTION_TYPE_SETCOLOR
@@ -3361,6 +3368,13 @@ proc parser_parse_filledrect
     ret
 endp parser_parse_filledrect
 
+proc parser_parse_diagonalline
+    push INSTRUCTION_TYPE_DIAGONALLINE
+    push TOKEN_TYPE_DIAGONALLINE
+    call parser_parse_instruction_two_args
+    ret
+endp parser_parse_diagonalline
+
 proc parser_parse_show
     push INSTRUCTION_TYPE_SHOW
     push TOKEN_TYPE_SHOW
@@ -3402,6 +3416,9 @@ proc parser_parse_instruction
     test ax, ax
     jnz parsed_instruction
     call parser_parse_filledrect
+    test ax, ax
+    jnz parsed_instruction
+    call parser_parse_diagonalline
     test ax, ax
     jnz parsed_instruction
     call parser_parse_show
@@ -5574,7 +5591,7 @@ start_x = bp - 6
 start_y = bp - 8
 rect_width = bp - 10
 rect_height = bp - 12
-proc instruction_rectangular_execute
+proc instruction_position_size_execute
     push bp
     mov bp, sp
     sub sp, 8
@@ -5664,7 +5681,7 @@ proc instruction_rectangular_execute
     add sp, 8
     pop bp
     ret 4
-endp instruction_rectangular_execute
+endp instruction_position_size_execute
 
 instruction_ptr = bp + 4
 proc instruction_rect_execute
@@ -5673,7 +5690,7 @@ proc instruction_rect_execute
 
     push offset graphics_show_rect
     push [instruction_ptr]
-    call instruction_rectangular_execute
+    call instruction_position_size_execute
 
     pop bp
     ret 2
@@ -5686,11 +5703,24 @@ proc instruction_filledrect_execute
 
     push offset graphics_show_filledrect
     push [instruction_ptr]
-    call instruction_rectangular_execute
+    call instruction_position_size_execute
 
     pop bp
     ret 2
 endp instruction_filledrect_execute
+
+instruction_ptr = bp + 4
+proc instruction_diagonalline_execute
+    push bp
+    mov bp, sp
+
+    push offset graphics_show_diagonalline
+    push [instruction_ptr]
+    call instruction_position_size_execute
+
+    pop bp
+    ret 2
+endp instruction_diagonalline_execute
 
 instruction_ptr = bp + 4
 proc instruction_show_execute
@@ -5811,6 +5841,8 @@ proc instruction_execute
     je @@choice_rect
     cmp al, INSTRUCTION_TYPE_FILLEDRECT
     je @@choice_filledrect
+    cmp al, INSTRUCTION_TYPE_DIAGONALLINE
+    je @@choice_diagonalline
     cmp al, INSTRUCTION_TYPE_SHOW
     je @@choice_show
     cmp al, INSTRUCTION_TYPE_SETCOLOR
@@ -5847,6 +5879,10 @@ proc instruction_execute
 
 @@choice_filledrect:
     mov ax, offset instruction_filledrect_execute
+    jmp @@end_choice
+
+@@choice_diagonalline:
+    mov ax, offset instruction_diagonalline_execute
     jmp @@end_choice
 
 @@choice_show:
@@ -6320,6 +6356,106 @@ proc graphics_show_filledrect
     pop bp
     ret 8
 endp graphics_show_filledrect
+
+; Show a diagonal line
+start_x = bp + 4
+start_y = bp + 6
+line_width = bp + 8
+line_height = bp + 10
+proc graphics_show_diagonalline
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push es
+
+    cmp [word ptr line_width], 0
+    jne @@non_zero
+    cmp [word ptr line_height], 0
+    jne @@non_zero
+
+    ; If both width and height are 0, don't draw (drawing will result in a division by 0)
+    jmp @@end_loop_draw
+
+@@non_zero:
+
+    mov ax, 0A000h
+    mov es, ax
+
+    mov cx, 0
+
+    mov ax, [line_height]
+    cmp ax, [line_width]
+    jl @@loop_draw_width_times
+    jmp @@loop_draw_height_times
+
+@@loop_draw_width_times:
+    cmp cx, [line_width]
+    je @@end_loop_draw
+
+    ; Calculate y of new point using the slope
+    xor dx, dx
+    mov ax, cx
+    mov bx, [line_height]
+    imul bx
+    mov bx, [line_width]
+    idiv bx
+    ; Calculate position of new point as pixel
+    xor dx, dx
+    add ax, [start_y]
+    mov bx, GRAPHICS_SCREEN_WIDTH
+    imul bx
+    add ax, [start_x]
+    add ax, cx
+    ; Move to bx for use as index
+    mov bx, ax
+
+    mov al, [graphics_color]
+    mov [es:bx], al
+
+    inc cx
+    jmp @@loop_draw_width_times
+
+@@loop_draw_height_times:
+    cmp cx, [line_height]
+    je @@end_loop_draw
+
+    ; Calculate x of new point using the slope
+    xor dx, dx
+    mov ax, cx
+    mov bx, [line_width]
+    imul bx
+    mov bx, [line_height]
+    idiv bx
+    push ax ; Store x of point
+    ; Calculate position of new point as pixel
+    xor dx, dx
+    mov ax, [start_y]
+    add ax, cx
+    mov bx, GRAPHICS_SCREEN_WIDTH
+    imul bx
+    add ax, [start_x]
+    pop bx ; Get back x of point and add it
+    add ax, bx
+    ; Move to bx for use as index
+    mov bx, ax
+
+    mov al, [graphics_color]
+    mov [es:bx], al
+
+    inc cx
+    jmp @@loop_draw_height_times
+
+@@end_loop_draw:
+
+    pop es
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 8
+endp graphics_show_diagonalline
 
 start:
     mov ax, @data
