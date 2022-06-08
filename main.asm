@@ -930,7 +930,7 @@ proc close_file
     mov bx, [file]
     int 21h
 
-    pop ax 
+    pop ax
     ret
 endp close_file
 
@@ -2578,7 +2578,7 @@ endp parser_parse_expr_not
 
 var_name = bp - 2
 backtrack = bp - 4
-proc parser_parse_expr_var    
+proc parser_parse_expr_var
     push bp
     mov bp, sp
     sub sp, 4
