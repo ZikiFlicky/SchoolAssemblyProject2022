@@ -5523,6 +5523,7 @@ endp instruction_loop_execute
 
 instruction_ptr = bp + 4
 exec_func = bp + 6
+validate_func = bp + 8
 arg1_value = bp - 2
 arg2_value = bp - 4
 start_x = bp - 6
@@ -5558,8 +5559,6 @@ proc instruction_line_execute
     cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
     jne @@error_arg2_not_number
 
-    ; FIXME: Verify both args are valid not just in type but also in value
-
     push [arg1_value]
     call object_vector_get_x
     mov [start_x], ax
@@ -5575,6 +5574,14 @@ proc instruction_line_execute
     call object_deref
     push [arg2_value]
     call object_deref
+
+    mov ax, [validate_func]
+    push [line_length]
+    push [start_y]
+    push [start_x]
+    call ax
+    test ax, ax
+    jz @@error_invalid_arguments
 
     mov ax, [exec_func]
     push [line_length]
@@ -5606,13 +5613,21 @@ proc instruction_line_execute
     push offset runtime_error_expected_number
     call interpreter_runtime_error
 
+@@error_invalid_arguments:
+    mov ax, [instruction_ptr]
+    mov es, ax
+    ; Error
+    push [es:INSTRUCTION_OFF_FILE_INDEX]
+    push offset runtime_error_invalid_argument_values
+    call interpreter_runtime_error
+
 @@end_execute:
 
     pop es
     pop ax
     add sp, 6
     pop bp
-    ret 4
+    ret 6
 endp instruction_line_execute
 
 instruction_ptr = bp + 4
@@ -5620,6 +5635,7 @@ proc instruction_xline_execute
     push bp
     mov bp, sp
 
+    push offset graphics_validate_xline
     push offset graphics_show_xline
     push [instruction_ptr]
     call instruction_line_execute
@@ -5633,6 +5649,7 @@ proc instruction_yline_execute
     push bp
     mov bp, sp
 
+    push offset graphics_validate_yline
     push offset graphics_show_yline
     push [instruction_ptr]
     call instruction_line_execute
@@ -5740,7 +5757,6 @@ proc instruction_position_size_execute
     call interpreter_runtime_error
 
 @@error_invalid_arguments:
-    ; Set es to arg2 expr
     mov ax, [instruction_ptr]
     mov es, ax
     ; Error
@@ -6342,6 +6358,41 @@ proc graphics_validate_start_size_vectors
     pop bp
     ret 8
 endp graphics_validate_start_size_vectors
+
+
+start_x = bp + 4
+start_y = bp + 6
+line_length = bp + 8
+proc graphics_validate_xline
+    push bp
+    mov bp, sp
+
+    push 0 ; Height
+    push [line_length] ; Width
+    push [start_y]
+    push [start_x]
+    call graphics_validate_start_size_vectors
+
+    pop bp
+    ret 6
+endp graphics_validate_xline
+
+start_x = bp + 4
+start_y = bp + 6
+line_length = bp + 8
+proc graphics_validate_yline
+    push bp
+    mov bp, sp
+
+    push [line_length] ; Height
+    push 0 ; Width
+    push [start_y]
+    push [start_x]
+    call graphics_validate_start_size_vectors
+
+    pop bp
+    ret 6
+endp graphics_validate_yline
 
 ; Show horizontal line
 start_x = bp + 4
