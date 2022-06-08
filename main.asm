@@ -5859,23 +5859,34 @@ proc instruction_setcolor_execute
     mov es, ax ; Store the argument object segment
     ; Verify the object is a number
     cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
-    jne @@arg_not_number
+    jne @@error_arg_not_number
     ; Get the actual number from the object
     push es
     call object_number_get
 
-    ; FIXME: Check if the number is in range of possible values (between 0 and 15)
-    mov [graphics_color], al
+    ; Check if the number is in range of possible values (between 0 and 15)
+    cmp ax, 0
+    jl @@error_invalid_argument
+    cmp ax, 15 ; Max color number
+    jg @@error_invalid_argument
 
+    mov [graphics_color], al
     jmp @@end_execute
 
-@@arg_not_number:
+@@error_arg_not_number:
     mov ax, [instruction_ptr]
     mov es, ax
     mov ax, [es:INSTRUCTION_ONE_ARG_OFF_ARG]
     mov es, ax
     push [es:EXPR_OFF_FILE_INDEX]
     push offset runtime_error_expected_number
+    call interpreter_runtime_error
+
+@@error_invalid_argument:
+    mov ax, [instruction_ptr]
+    mov es, ax
+    push [es:INSTRUCTION_OFF_FILE_INDEX]
+    push offset runtime_error_invalid_argument_values
     call interpreter_runtime_error
 
 @@end_execute:
