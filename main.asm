@@ -339,6 +339,48 @@ proc panic
     ret
 endp panic
 
+; Get the absolute value of a word
+number = bp + 4
+proc number_abs
+    push bp
+    mov bp, sp
+
+    mov ax, [number]
+    cmp ax, 0
+    jl @@number_negative
+
+    jmp @@end_abs
+
+@@number_negative:
+    neg ax
+
+@@end_abs:
+
+    pop bp
+    ret 2
+endp number_abs
+
+; Get -1 if the number is smaller than 0 otherwise 1
+number = bp + 4
+proc number_get_direction
+    push bp
+    mov bp, sp
+
+    cmp [word ptr number], 0
+    jl @@number_negative
+
+    mov ax, 1
+    jmp @@end_abs
+
+@@number_negative:
+    mov ax, -1
+
+@@end_abs:
+
+    pop bp
+    ret 2
+endp number_get_direction
+
 ; Returns into ax whether the given char is a character that can start a variable
 character = bp + 4
 proc is_char_var_start
@@ -3152,7 +3194,6 @@ proc parser_parse_if
 
 @@not_parse_if:
     mov ax, 0
-    jmp @@end_parse
 
 @@end_parse:
 
@@ -6362,9 +6403,12 @@ start_x = bp + 4
 start_y = bp + 6
 line_width = bp + 8
 line_height = bp + 10
+width_direction = bp - 2
+height_direction = bp - 4
 proc graphics_show_diagonalline
     push bp
     mov bp, sp
+    sub sp, 4
     push ax
     push bx
     push cx
@@ -6383,11 +6427,34 @@ proc graphics_show_diagonalline
     mov ax, 0A000h
     mov es, ax
 
+    ; Get direction of width
+    push [line_width]
+    call number_get_direction
+    mov [width_direction], ax
+    ; Get direction of height
+    push [line_height]
+    call number_get_direction
+    mov [height_direction], ax
+    ; Add to line width and height because we want to also color the last pixel
+    mov ax, [width_direction]
+    add [line_width], ax
+    mov ax, [height_direction]
+    add [line_height], ax
+
+    ; Loop counter
     mov cx, 0
 
-    mov ax, [line_height]
-    cmp ax, [line_width]
-    jl @@loop_draw_width_times
+    ; Ax = abs(line_width), Bx = abs(line_height)
+    push [line_height]
+    call number_abs
+    mov bx, ax
+    push [line_width]
+    call number_abs
+
+    ; All of this is done in order to create a line with enough dots and minimize spacing between pixels
+    ; Compare absolute width with absolute height
+    cmp ax, bx
+    ja @@loop_draw_width_times
     jmp @@loop_draw_height_times
 
 @@loop_draw_width_times:
@@ -6414,7 +6481,7 @@ proc graphics_show_diagonalline
     mov al, [graphics_color]
     mov [es:bx], al
 
-    inc cx
+    add cx, [width_direction]
     jmp @@loop_draw_width_times
 
 @@loop_draw_height_times:
@@ -6444,7 +6511,7 @@ proc graphics_show_diagonalline
     mov al, [graphics_color]
     mov [es:bx], al
 
-    inc cx
+    add cx, [height_direction]
     jmp @@loop_draw_height_times
 
 @@end_loop_draw:
@@ -6453,6 +6520,7 @@ proc graphics_show_diagonalline
     pop cx
     pop bx
     pop ax
+    add sp, 4
     pop bp
     ret 8
 endp graphics_show_diagonalline
