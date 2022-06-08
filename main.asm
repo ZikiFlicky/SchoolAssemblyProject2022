@@ -6211,40 +6211,46 @@ endp graphics_convert_position_to_index
 start_x = bp + 4
 start_y = bp + 6
 line_length = bp + 8
+line_direction = bp - 2
 proc graphics_show_xline
     push bp
     mov bp, sp
+    sub sp, 2
     push ax
     push bx
-    push dx
+    push cx
     push es
 
     mov ax, 0A000h
     mov es, ax
+
+    push [line_length]
+    call number_get_direction
+    mov [line_direction], ax ; Store direction for use in the loop
 
     push [start_y]
     push [start_x]
     call graphics_convert_position_to_index
     mov bx, ax
 
-    mov ax, 0
+    mov cx, 0
 @@loop_line:
-    cmp ax, [line_length]
+    mov al, [graphics_color]
+    mov [es:bx], al
+
+    cmp cx, [line_length]
     je @@end_loop_line
-
-    mov dl, [graphics_color]
-    mov [es:bx], dl
-
-    inc ax
-    inc bx
+    add cx, [line_direction]
+    add bx, [line_direction]
     jmp @@loop_line
 
 @@end_loop_line:
 
     pop es
-    pop dx
+    pop cx
     pop bx
     pop ax
+    add sp, 2
     pop bp
     ret 6
 endp graphics_show_xline
@@ -6253,40 +6259,57 @@ endp graphics_show_xline
 start_x = bp + 4
 start_y = bp + 6
 line_length = bp + 8
+index_change = bp - 2
 proc graphics_show_yline
     push bp
     mov bp, sp
+    sub sp, 2
     push ax
     push bx
+    push cx
     push dx
     push es
 
     mov ax, 0A000h
     mov es, ax
 
+    ; Multiply sign by width to get the change in index we need to have each iteration
+    push [line_length]
+    call number_get_direction ; Returns to ax
+    xor dx, dx
+    mov bx, GRAPHICS_SCREEN_WIDTH
+    mul bx
+    mov [index_change], ax
+
+    ; Make line_length absolute
+    push [line_length]
+    call number_abs
+    mov [line_length], ax
+
     push [start_y]
     push [start_x]
     call graphics_convert_position_to_index
     mov bx, ax
 
-    mov ax, 0
+    mov cx, 0
 @@loop_line:
-    cmp ax, [line_length]
+    mov al, [graphics_color]
+    mov [es:bx], al
+
+    cmp cx, [line_length]
     je @@end_loop_line
-
-    mov dl, [graphics_color]
-    mov [es:bx], dl
-
-    inc ax
-    add bx, GRAPHICS_SCREEN_WIDTH
+    inc cx
+    add bx, [index_change]
     jmp @@loop_line
 
 @@end_loop_line:
 
     pop es
     pop dx
+    pop cx
     pop bx
     pop ax
+    add sp, 2
     pop bp
     ret 6
 endp graphics_show_yline
@@ -6300,12 +6323,6 @@ proc graphics_show_rect
     push bp
     mov bp, sp
     push ax
-
-    ; We still draw the sides
-    cmp [word ptr rect_width], 0
-    je @@end_draw
-    cmp [word ptr rect_height], 0
-    je @@end_draw
 
     ; Top
     push [rect_width]
@@ -6322,7 +6339,6 @@ proc graphics_show_rect
     push [rect_width]
     mov ax, [start_y]
     add ax, [rect_height]
-    dec ax
     push ax ; We need this so we don't have an empty pixel in the bottom right corner
     push [start_x]
     call graphics_show_xline
@@ -6331,7 +6347,6 @@ proc graphics_show_rect
     push [start_y]
     mov ax, [start_x]
     add ax, [rect_width]
-    dec ax ; We need this so we don't have an empty pixel in the bottom right corner
     push ax
     call graphics_show_yline
 
@@ -6347,22 +6362,25 @@ start_x = bp + 4
 start_y = bp + 6
 rect_width = bp + 8
 rect_height = bp + 10
+number_direction =  bp - 2
 proc graphics_show_filledrect
     push bp
     mov bp, sp
+    sub sp, 2
     push ax
     push cx
 
     ; Decide which function to call for better speed
+    ; Less calls means less overhead
     mov ax, [rect_width]
     cmp ax, [rect_height]
     jl @@draw_by_width
 
+    push [rect_width]
+    call number_get_direction
+    mov [number_direction], ax
     mov cx, 0
 @@draw_vertical:
-    cmp cx, [rect_width]
-    je @@end_draw
-
     push [rect_height]
     push [start_y]
     mov ax, [start_x]
@@ -6370,16 +6388,18 @@ proc graphics_show_filledrect
     push ax
     call graphics_show_yline
 
-    inc cx
+    cmp cx, [rect_width]
+    je @@end_draw
+    add cx, [number_direction]
     jmp @@draw_vertical
 
 @@draw_by_width:
 
+    push [rect_height]
+    call number_get_direction
+    mov [number_direction], ax
     mov cx, 0
 @@draw_horizontal:
-    cmp cx, [rect_height]
-    je @@end_draw
-
     push [rect_width]
     mov ax, [start_y]
     add ax, cx
@@ -6387,13 +6407,16 @@ proc graphics_show_filledrect
     push [start_x]
     call graphics_show_xline
 
-    inc cx
+    cmp cx, [rect_height]
+    je @@end_draw
+    add cx, [number_direction]
     jmp @@draw_horizontal
 
 @@end_draw:
 
     pop cx
     pop ax
+    add sp, 2
     pop bp
     ret 8
 endp graphics_show_filledrect
