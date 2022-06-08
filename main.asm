@@ -158,25 +158,26 @@ DATASEG
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
+    INSTRUCTION_OFF_FILE_INDEX = 1
 
-    INSTRUCTION_ASSIGN_OFF_KEY = 1
-    INSTRUCTION_ASSIGN_OFF_EXPR = 3
+    INSTRUCTION_ASSIGN_OFF_KEY = 3
+    INSTRUCTION_ASSIGN_OFF_EXPR = 5
 
-    INSTRUCTION_ONE_ARG_OFF_ARG = 1
+    INSTRUCTION_ONE_ARG_OFF_ARG = 3
 
-    INSTRUCTION_IF_OFF_EXPR = 1
-    INSTRUCTION_IF_OFF_BLOCK = 3
-    INSTRUCTION_IF_OFF_ELSE_BLOCK = 5
+    INSTRUCTION_IF_OFF_EXPR = 3
+    INSTRUCTION_IF_OFF_BLOCK = 5
+    INSTRUCTION_IF_OFF_ELSE_BLOCK = 7
 
-    INSTRUCTION_LOOP_OFF_EXPR = 1
-    INSTRUCTION_LOOP_OFF_BLOCK = 3
+    INSTRUCTION_LOOP_OFF_EXPR = 3
+    INSTRUCTION_LOOP_OFF_BLOCK = 5
 
-    INSTRUCTION_ONE_ARG_OFF_ARG = 1
+    INSTRUCTION_ONE_ARG_OFF_ARG = 3
 
-    INSTRUCTION_TWO_ARGS_OFF_ARG1 = 1
-    INSTRUCTION_TWO_ARGS_OFF_ARG2 = 3
+    INSTRUCTION_TWO_ARGS_OFF_ARG1 = 3
+    INSTRUCTION_TWO_ARGS_OFF_ARG2 = 5
 
-    INSTRUCTION_MAX_SIZE = 7
+    INSTRUCTION_MAX_SIZE = 9
 
     ; Stores parsed instructions
     ; FIXME: This can overflow + only allows a certain amount of instructions
@@ -310,6 +311,7 @@ DATASEG
     runtime_error_invalid_operator_type db "Invalid operator type", 0
     runtime_error_expected_number db "Expected number", 0
     runtime_error_expected_vector db "Expected vector", 0
+    runtime_error_invalid_argument_values db "Invalid argument values", 0
 
 
     ; Panic related stuff
@@ -3433,55 +3435,70 @@ endp parser_parse_setcolor
 ; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
 ; Returns a parsed instruction segment into ax, or 0 if not found
 instruction_ptr = bp - 2
+backtrack = bp - 4
 proc parser_parse_instruction
     push bp
     mov bp, sp
-    sub sp, 2
+    sub sp, 4
+    push es
+
+    ; Store backtrack for the instruction's inner start position
+    mov ax, [file_idx]
+    mov [backtrack], ax
 
     call parser_parse_assignment
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
     call parser_parse_if
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
     call parser_parse_loop
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
     call parser_parse_xline
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
     call parser_parse_yline
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
     call parser_parse_rect
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
     call parser_parse_filledrect
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
     call parser_parse_diagonalline
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
     call parser_parse_show
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
     call parser_parse_setcolor
     test ax, ax
-    jnz parsed_instruction
+    jnz @@parsed_instruction
 
     ; If wasn't able to parse an instruction, return a NULL
     mov [word ptr instruction_ptr], 0
-    jmp end_parse_instruction
+    jmp @@end_parse
 
-parsed_instruction:
+@@parsed_instruction:
     mov [word ptr instruction_ptr], ax ; Save the instruction in the stack
     push 1
     call parser_expect_newline
 
-end_parse_instruction:
+    ; Get instruction into es
     mov ax, [instruction_ptr]
+    mov es, ax
+    ; Put backtrack into instruction
+    mov ax, [backtrack]
+    mov [es:INSTRUCTION_OFF_FILE_INDEX], ax
+    ; Return the instruction
+    mov ax, es
 
-    add sp, 2
+@@end_parse:
+
+    pop es
+    add sp, 4
     pop bp
     ret
 endp parser_parse_instruction
@@ -5534,12 +5551,12 @@ proc instruction_line_execute
     mov ax, [arg1_value]
     mov es, ax
     cmp [word ptr es:OBJECT_OFF_TYPE], offset object_vector_type
-    jne @@arg1_not_vector
+    jne @@error_arg1_not_vector
     ; Verify the second argument is a number
     mov ax, [arg2_value]
     mov es, ax
     cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
-    jne @@arg2_not_number
+    jne @@error_arg2_not_number
 
     ; FIXME: Verify both args are valid not just in type but also in value
 
@@ -5567,7 +5584,7 @@ proc instruction_line_execute
 
     jmp @@end_execute
 
-@@arg1_not_vector:
+@@error_arg1_not_vector:
     ; Set es to arg1 expr
     mov ax, [instruction_ptr]
     mov es, ax
@@ -5578,7 +5595,7 @@ proc instruction_line_execute
     push offset runtime_error_expected_vector
     call interpreter_runtime_error
 
-@@arg2_not_number:
+@@error_arg2_not_number:
     ; Set es to arg2 expr
     mov ax, [instruction_ptr]
     mov es, ax
@@ -5630,8 +5647,8 @@ arg1_value = bp - 2
 arg2_value = bp - 4
 start_x = bp - 6
 start_y = bp - 8
-rect_width = bp - 10
-rect_height = bp - 12
+size_width = bp - 10
+size_height = bp - 12
 proc instruction_position_size_execute
     push bp
     mov bp, sp
@@ -5655,14 +5672,12 @@ proc instruction_position_size_execute
     mov ax, [arg1_value]
     mov es, ax
     cmp [word ptr es:OBJECT_OFF_TYPE], offset object_vector_type
-    jne @@arg1_not_vector
+    jne @@error_arg1_not_vector
     ; Verify the second argument is a number
     mov ax, [arg2_value]
     mov es, ax
     cmp [word ptr es:OBJECT_OFF_TYPE], offset object_vector_type
-    jne @@arg2_not_vector
-
-    ; FIXME: Verify both args are valid not just in type but also in value
+    jne @@error_arg2_not_vector
 
     ; Get the start x and y
     push [arg1_value]
@@ -5674,18 +5689,27 @@ proc instruction_position_size_execute
     ; Get the end x and y
     push [arg2_value]
     call object_vector_get_x
-    mov [rect_width], ax
+    mov [size_width], ax
     push [arg2_value]
     call object_vector_get_y
-    mov [rect_height], ax
+    mov [size_height], ax
 
+    ; Deref values used
     push [arg1_value]
     call object_deref
     push [arg2_value]
     call object_deref
 
-    push [rect_height]
-    push [rect_width]
+    push [size_height]
+    push [size_width]
+    push [start_y]
+    push [start_x]
+    call graphics_validate_start_size_vectors
+    test ax, ax
+    jz @@error_invalid_arguments
+
+    push [size_height]
+    push [size_width]
     push [start_y]
     push [start_x]
     mov ax, [exec_func]
@@ -5693,7 +5717,7 @@ proc instruction_position_size_execute
 
     jmp @@end_execute
 
-@@arg1_not_vector:
+@@error_arg1_not_vector:
     ; Set es to arg1 expr
     mov ax, [instruction_ptr]
     mov es, ax
@@ -5704,7 +5728,7 @@ proc instruction_position_size_execute
     push offset runtime_error_expected_vector
     call interpreter_runtime_error
 
-@@arg2_not_vector:
+@@error_arg2_not_vector:
     ; Set es to arg2 expr
     mov ax, [instruction_ptr]
     mov es, ax
@@ -5713,6 +5737,15 @@ proc instruction_position_size_execute
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
     push offset runtime_error_expected_vector
+    call interpreter_runtime_error
+
+@@error_invalid_arguments:
+    ; Set es to arg2 expr
+    mov ax, [instruction_ptr]
+    mov es, ax
+    ; Error
+    push [es:INSTRUCTION_OFF_FILE_INDEX]
+    push offset runtime_error_invalid_argument_values
     call interpreter_runtime_error
 
 @@end_execute:
@@ -6206,6 +6239,98 @@ proc graphics_convert_position_to_index
     pop bp
     ret 4
 endp graphics_convert_position_to_index
+
+; Sets ax to 1 if x is inside the screen (0<x<width) otherwise sets it to 0
+x = bp + 4
+proc graphics_x_possible
+    push bp
+    mov bp, sp
+
+    cmp [word ptr x], 0
+    jl @@not_possible
+    cmp [word ptr x], GRAPHICS_SCREEN_WIDTH
+    jge @@not_possible
+
+    mov ax, 1
+    jmp @@end_check
+
+@@not_possible:
+    mov ax, 0
+
+@@end_check:
+
+    pop bp
+    ret 2
+endp graphics_x_possible
+
+; Sets ax to 1 if y is inside the screen (0<y<height) otherwise sets it to 0
+y = bp + 4
+proc graphics_y_possible
+    push bp
+    mov bp, sp
+
+    cmp [word ptr y], 0
+    jl @@not_possible
+    cmp [word ptr y], GRAPHICS_SCREEN_HEIGHT
+    jge @@not_possible
+
+    mov ax, 1
+    jmp @@end_check
+
+@@not_possible:
+    mov ax, 0
+
+@@end_check:
+
+    pop bp
+    ret 2
+endp graphics_y_possible
+
+; Returns into ax whether a start-size vector pair is possibly inside of the screen
+start_x = bp + 4
+start_y = bp + 6
+size_width = bp + 8
+size_height = bp + 10
+proc graphics_validate_start_size_vectors
+    push bp
+    mov bp, sp
+
+    ; Check if start x and end x are inside the screen
+    push [start_x]
+    call graphics_x_possible
+    test ax, ax
+    jz @@invalid_vectors
+    mov ax, [start_x]
+    add ax, [size_width]
+    push ax
+    call graphics_x_possible
+    test ax, ax
+    jz @@invalid_vectors
+
+    ; Check if start y and end y are inside the screen
+    push [start_y]
+    call graphics_y_possible
+    test ax, ax
+    jz @@invalid_vectors
+    mov ax, [start_y]
+    add ax, [size_height]
+    push ax
+    call graphics_y_possible
+    test ax, ax
+    jz @@invalid_vectors
+
+    ; If we got here, the vectors are valid
+    mov ax, 1
+    jmp @@end_validation
+
+@@invalid_vectors:
+    mov ax, 0
+
+@@end_validation:
+
+    pop bp
+    ret 8
+endp graphics_validate_start_size_vectors
 
 ; Show horizontal line
 start_x = bp + 4
