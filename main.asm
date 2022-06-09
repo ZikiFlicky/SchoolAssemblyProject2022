@@ -333,6 +333,8 @@ proc exit_fail
     ret
 endp exit_fail
 
+; Print a panic message and exit
+; Used in places we don't want or wont ever reach
 proc panic
     ; Print panic message
     push offset panic_message
@@ -384,7 +386,7 @@ proc number_get_direction
     ret 2
 endp number_get_direction
 
-; Returns into ax whether the given char is a character that can start a variable
+; Returns whether the given char is a character that can start a variable
 character = bp + 4
 proc is_char_var_start
     push bp
@@ -421,6 +423,7 @@ character_var_start_check_end:
     ret 2
 endp is_char_var_start
 
+; Returns whether the argument is a character that can be in the middle of a variable name (any character not at the start)
 character = bp + 4
 proc is_char_var
     push bp
@@ -451,6 +454,7 @@ character_var_check_end:
     ret 2
 endp is_char_var
 
+; Print a newline (carriage return + line feed)
 proc print_newline
     push ax
     push bx
@@ -467,6 +471,7 @@ proc print_newline
     ret
 endp print_newline
 
+; Print a cstr using a segment and an offset
 string_segment = bp + 4
 string_offset = bp + 6
 proc print_cstr
@@ -520,6 +525,7 @@ proc print_data_cstr
     ret 2
 endp print_data_cstr
 
+; Print a word
 word_number = bp + 4
 proc print_word
     push bp
@@ -599,6 +605,8 @@ end_divide_number:
     ret 2
 endp print_word
 
+; FIXME: The page-size calculation
+; Allocate `amount` bytes and return the segment of the allocated block
 amount = bp + 4
 proc heap_alloc
     push bp
@@ -630,6 +638,7 @@ allocation_success:
     ret 2
 endp heap_alloc
 
+; Free a heap-allocated segment
 address = bp + 4
 proc heap_free
     push bp
@@ -648,8 +657,9 @@ proc heap_free
     ret 2
 endp heap_free
 
-heapstr1 = bp + 4
-heapstr2 = bp + 6
+; Compares two cstrs (the segments of the cstrs) and returns whether they're equal
+cstr1 = bp + 4
+cstr2 = bp + 6
 index = bp - 2
 proc cstrs_eq
     push bp
@@ -664,11 +674,11 @@ proc cstrs_eq
 loop_cstrs:
     mov bx, [index]
     ; Get char from first string
-    mov ax, [heapstr1]
+    mov ax, [cstr1]
     mov es, ax
     mov cl, [es:bx]
     ; Get char from second string
-    mov ax, [heapstr2]
+    mov ax, [cstr2]
     mov es, ax
     mov ch, [es:bx]
 
@@ -726,12 +736,60 @@ proc error_setup
     ret
 endp error_setup
 
-; End execution by waiting for a key press on the escape key
+; Print the rest of the line from the index onwards
+index = bp + 4
+backtrack = bp - 2
+proc print_line_from_index
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push ax
+    push bx
+
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    push [index]
+    call file_set_idx
+
+@@read_line:
+    call file_read_newline
+    test ax, ax
+    jnz @@end_read_line
+    push 1
+    call read_bytes
+    test ax, ax
+    jz @@end_read_line
+
+    ; Put the character
+    mov ah, 0Eh
+    mov al, [file_read_buffer + 0]
+    mov bh, 0
+    mov bl, [graphics_color]
+    int 10h
+
+    jmp @@read_line
+
+@@end_read_line:
+
+    ; Reload
+    push [backtrack]
+    call file_set_idx
+
+    pop bx
+    pop ax
+    add sp, 2
+    pop bp
+    ret 2
+endp print_line_from_index
+
+; Waits for the user to press the ESC key
 proc wait_for_user_end_execution
     push ax
 
-    @@loop_key_wait:
-    call wait_for_key
+@@loop_key_wait:
+    mov ah, 0
+    int 16h
     cmp ah, 1 ; If pressed escape exit
     jne @@loop_key_wait
 
@@ -739,7 +797,8 @@ proc wait_for_user_end_execution
     ret
 endp wait_for_user_end_execution
 
-; Shows an error
+; Shows an error with line and column information, including showing the line the error occurred in
+; Used as "template" for other error functions
 error_start_ptr = bp + 4
 message_ptr = bp + 6
 index = bp + 8
@@ -818,61 +877,10 @@ proc show_file_error
     ret 6
 endp show_file_error
 
-index = bp + 4
-backtrack = bp - 2
-proc print_line_from_index
-    push bp
-    mov bp, sp
-    sub sp, 2
-    push ax
-    push bx
-
-    mov ax, [file_idx]
-    mov [backtrack], ax
-
-    push [index]
-    call file_set_idx
-
-@@read_line:
-    call file_read_newline
-    test ax, ax
-    jnz @@end_read_line
-    push 1
-    call read_bytes
-    test ax, ax
-    jz @@end_read_line
-
-    ; Put the character
-    mov ah, 0Eh
-    mov al, [file_read_buffer + 0]
-    mov bh, 0
-    mov bl, [graphics_color]
-    int 10h
-
-    jmp @@read_line
-
-@@end_read_line:
-
-    ; Reload
-    push [backtrack]
-    call file_set_idx
-
-    pop bx
-    pop ax
-    add sp, 2
-    pop bp
-    ret 2
-endp print_line_from_index
-
-; Wait until some key is pressed. Used to exit the interpreter
-proc wait_for_key
-    mov ah, 0
-    int 16h
-    ret
-endp wait_for_key
-
 ; File procedures
 
+; Opens our file using command line arguments if found
+; Possibly errors
 proc open_file
     push ax
     push dx
@@ -926,6 +934,7 @@ proc open_file
     ret
 endp open_file
 
+; Closes our file
 proc close_file
     push ax
 
@@ -938,6 +947,8 @@ proc close_file
     ret
 endp close_file
 
+; Sets the read index of the file
+; Changes both `file_idx` and the actual index of the file handle
 idx = bp + 4
 proc file_set_idx
     push bp
@@ -965,6 +976,9 @@ proc file_set_idx
     ret 2
 endp file_set_idx
 
+; Reads `amount_bytes` bytes into `file_read_buffer`
+; If file doesn't have at least `amount_bytes` bytes left,
+; we return false, otherwise we return true
 amount_bytes = bp + 4
 backtrack = bp - 2
 proc read_bytes
@@ -981,7 +995,7 @@ proc read_bytes
     mov ah, 3Fh
     mov bx, [file]
     mov cx, [amount_bytes]
-    lea dx, [word ptr file_read_buffer]
+    lea dx, [file_read_buffer]
     int 21h
 
     ; If had error
@@ -1001,6 +1015,7 @@ proc read_bytes
     push [backtrack]
     call file_set_idx
     mov ax, 0
+
 @@no_error:
 
     pop dx
@@ -1011,6 +1026,8 @@ proc read_bytes
     ret 2
 endp read_bytes
 
+; Tries to read a single newline from the file and returns whether it managed to do so
+; Advances the file if it found the newline
 backtrack = bp - 2
 proc file_read_newline
     push bp
@@ -1058,6 +1075,8 @@ proc file_read_newline
     ret
 endp file_read_newline
 
+; Returns the line and column into ax and bx (respectively) given the parameter file index
+; Used for errors
 index = bp + 4
 backtrack = bp - 2
 line = bp - 4
@@ -1118,6 +1137,7 @@ endp file_get_line_col_of_index
 
 ; Token procedures
 
+; Takes a token from a segment and an offset in memory and puts the global token into it
 token_seg = bp + 4
 token_offset = bp + 6
 proc token_copy
@@ -1151,6 +1171,7 @@ proc token_copy
     ret 4
 endp token_copy
 
+; Takes a token from a segment and an offset in memory and sets them as the global token
 token_seg = bp + 4
 token_offset = bp + 6
 proc token_set
@@ -1184,6 +1205,7 @@ proc token_set
     ret 4
 endp token_set
 
+; Converts a token into a heap-allocated cstr (NUL-terminated string) and returns it
 backtrack = bp - 2
 proc token_to_cstr
     push bp
@@ -1237,6 +1259,7 @@ end_copy_char_to_cstr:
     ret
 endp token_to_cstr
 
+; Converts a number token into an actual word and returns it
 backtrack = bp - 2
 number = bp - 4
 proc token_to_number
@@ -1307,7 +1330,7 @@ endp token_to_number
 
 ; Lexer procedures
 
-; Returns into ax a bool sayng if we were able to lex the newline
+; Try to lex a newline (or more, bunched together) and return whether we managed to do so
 times_newline = bp - 2
 proc lex_newline
     push bp
@@ -1349,7 +1372,7 @@ proc lex_newline
     ret
 endp lex_newline
 
-; Returns into ax a bool saying if we were able to lex the number
+; Try to lex a number and return whether we managed to do so
 backtrack = bp - 2
 proc lex_number
     push bp
@@ -1416,7 +1439,7 @@ end_number_lex:
     ret
 endp lex_number
 
-; Returns into ax a bool saying if we were able to lex the number
+; Try to lex the string and return whether we were to do so
 backtrack = bp - 2
 proc lex_string
     push bp
@@ -1474,6 +1497,7 @@ proc lex_string
     ret
 endp lex_string
 
+; Try to lex a keyword using the given information and return whether we managed to do so
 keyword_ptr = bp + 4
 backtrack = bp - 2
 keyword_length = bp - 4
@@ -1568,6 +1592,7 @@ proc lex_single_keyword
     ret 2
 endp lex_single_keyword
 
+; Try to lex any of the keywords and return whether we managed to do so
 proc lex_keywords
     push bp
     mov bp, sp
@@ -1605,7 +1630,7 @@ proc lex_keywords
     ret
 endp lex_keywords
 
-; Returns into ax a bool saying if we were able to lex the variable name
+; Try to lex a variable name and return whether we were able to do so
 backtrack = bp - 2
 proc lex_var
     push bp
@@ -1672,6 +1697,7 @@ end_var_lex:
     ret
 endp lex_var
 
+; Try to lex a char and return whether you did
 new_token_type = bp + 5
 character = bp + 4
 backtrack = bp - 2
@@ -1712,6 +1738,7 @@ lex_char_end:
     ret 2
 endp lex_char
 
+; Try to lex any of the two byte tokens (like == and !=) and return whether you did
 backtrack = bp - 2
 proc lex_double_byte_tokens
     push bp
@@ -1772,6 +1799,7 @@ proc lex_double_byte_tokens
     ret
 endp lex_double_byte_tokens
 
+; Try to lex any of the single byte tokens (like + and -)
 backtrack = bp - 2
 proc lex_single_byte_tokens
     push bp
@@ -1824,6 +1852,7 @@ proc lex_single_byte_tokens
     ret
 endp lex_single_byte_tokens
 
+; Writes a message in the format "LexerError [line l, column c]: Error message" and exits
 message_ptr = bp + 4
 index = bp + 6
 proc lexer_error
@@ -1848,7 +1877,7 @@ proc lexer_error
     ret 2
 endp lexer_error
 
-; Returns into ax whether we found a comment
+; Returns whether we found a comment and advances it if we did
 backtrack = bp - 2
 proc remove_comment
     push bp
@@ -1897,6 +1926,7 @@ proc remove_comment
     ret
 endp remove_comment
 
+; Advances whitespace in the file (tabs and spaces)
 backtrack = bp - 2
 proc remove_whitespace
     push bp
@@ -1928,6 +1958,9 @@ end_removing:
     ret
 endp remove_whitespace
 
+; Lexes a token, stores it in the global token and advances the file index
+; Returns false if we encountered an EOF, otherwise returns true
+; Errors if we can't lex anything
 backtrack = bp - 2
 proc lex
     push bp
@@ -2014,6 +2047,7 @@ proc expr_new
     ret 4
 endp expr_new
 
+; Deletes an expression
 expr_ptr = bp + 4
 proc expr_delete
     push bp
@@ -2116,6 +2150,7 @@ proc instruction_new
     ret 2
 endp instruction_new
 
+; Deletes an instruction
 instruction_ptr = bp + 4
 proc instruction_delete
     push bp
@@ -2204,6 +2239,7 @@ proc instruction_delete
     ret 2
 endp instruction_delete
 
+; Writes a message in the format "ParserError [line l, column c]: Error message" and exits
 message_ptr = bp + 4
 index = bp + 6
 proc parser_error
@@ -2227,7 +2263,7 @@ proc parser_error
     ret 4
 endp parser_error
 
-; Returns into ax whether we matched a token type
+; Returns whether we matched a token type and does nothing if we didn't
 expected_type = bp + 4
 backtrack = bp - 2
 proc parser_match
@@ -2264,6 +2300,9 @@ end_match:
     ret 2
 endp parser_match
 
+; Checks for a newline or EOF and if found neither,
+; depending on `should_error`, it either returns whether
+; it found a newline, or errors when it didn't find them
 should_error = bp + 4
 backtrack = bp - 2
 proc parser_expect_newline
@@ -2310,6 +2349,7 @@ proc parser_expect_newline
     ret 2
 endp parser_expect_newline
 
+; Parse the number expression
 number = bp - 2
 backtrack = bp - 4
 proc parser_parse_expr_number
@@ -2353,6 +2393,7 @@ parse_expr_number_finish:
     ret
 endp parser_parse_expr_number
 
+; Parse the "string" expression
 string = bp - 2
 backtrack = bp - 4
 proc parser_parse_expr_string
@@ -2398,6 +2439,7 @@ proc parser_parse_expr_string
     ret
 endp parser_parse_expr_string
 
+; Parse the (x, y) expression
 lhs_ptr = bp - 2
 rhs_ptr = bp - 4
 backtrack = bp - 6
@@ -2478,6 +2520,7 @@ proc parser_parse_expr_vector
     ret
 endp parser_parse_expr_vector
 
+; Parse the (expr) expression
 inner_expr_ptr = bp - 2
 proc parser_parse_expr_paren
     push bp
@@ -2523,6 +2566,7 @@ proc parser_parse_expr_paren
     ret
 endp parser_parse_expr_paren
 
+; General functions for parsing unary operators like `neg` or `not`
 start_token_type = bp + 4
 expr_type = bp + 6
 inner_expr_ptr = bp - 2
@@ -2573,6 +2617,7 @@ proc parser_parse_expr_unary
     ret 4
 endp parser_parse_expr_unary
 
+; Parse the `-value` operator
 proc parser_parse_expr_neg
     push EXPR_TYPE_NEG
     push TOKEN_TYPE_MINUS
@@ -2580,6 +2625,7 @@ proc parser_parse_expr_neg
     ret
 endp parser_parse_expr_neg
 
+; Parse the `!`
 proc parser_parse_expr_not
     push EXPR_TYPE_NOT
     push TOKEN_TYPE_EXCLAMATION_MARK
@@ -2587,6 +2633,7 @@ proc parser_parse_expr_not
     ret
 endp parser_parse_expr_not
 
+; Parse a variable
 var_name = bp - 2
 backtrack = bp - 4
 proc parser_parse_expr_var
@@ -2660,6 +2707,7 @@ proc parser_parse_expr_single
     ret
 endp parser_parse_expr_single
 
+; Parses the `*` and `/` expressions
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
@@ -2739,6 +2787,7 @@ proc parser_parse_expr_product
     ret
 endp parser_parse_expr_product
 
+; Parses the `+` and `-` expressions
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
@@ -2811,6 +2860,7 @@ proc parser_parse_expr_sum
     ret
 endp parser_parse_expr_sum
 
+; Parses the `<`, `>`, `<=`, `>=`, `==` and `!=` expressions
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
@@ -2908,6 +2958,7 @@ proc parser_parse_expr_cmp
     ret
 endp parser_parse_expr_cmp
 
+; Parse the `&&` expression
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
@@ -2975,6 +3026,7 @@ proc parser_parse_expr_and
     ret
 endp parser_parse_expr_and
 
+; Parse the `||` expression
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
@@ -3041,7 +3093,8 @@ proc parser_parse_expr_or
     ret
 endp parser_parse_expr_or
 
-; The upmost expression parser
+; The lowest-precedence expression parser
+; Used for easier maintanance and readability of code
 proc parser_parse_expr
     call parser_parse_expr_or
     ret
@@ -3127,7 +3180,7 @@ proc parser_parse_assignment
     ret
 endp parser_parse_assignment
 
-; Parse the IF instruction
+; Parse the `if` instruction
 expr_ptr = bp - 2
 block_ptr = bp - 4
 else_block_ptr = bp - 6
@@ -3215,7 +3268,7 @@ proc parser_parse_if
     ret
 endp parser_parse_if
 
-; Parse the loop instruction
+; Parse the `loop` instruction
 expr_ptr = bp - 2
 block_ptr = bp - 4
 proc parser_parse_loop
@@ -3281,6 +3334,7 @@ proc parser_parse_loop
     ret
 endp parser_parse_loop
 
+; Parse an instruction with a one argument after the start token
 start_token = bp + 4
 instruction_type = bp + 6
 argument = bp - 2
@@ -3327,7 +3381,7 @@ proc parser_parse_instruction_one_arg
     ret 4
 endp parser_parse_instruction_one_arg
 
-; Parse an instruction with a vector and a number as parameters
+; Parse an instruction with a two arguments after the start token
 start_token = bp + 4
 instruction_type = bp + 6
 arg1 = bp - 2
@@ -3393,6 +3447,7 @@ proc parser_parse_instruction_two_args
     ret 4
 endp parser_parse_instruction_two_args
 
+; Parses the `xline` instruction
 proc parser_parse_xline
     push INSTRUCTION_TYPE_XLINE
     push TOKEN_TYPE_XLINE
@@ -3400,6 +3455,7 @@ proc parser_parse_xline
     ret
 endp parser_parse_xline
 
+; Parses the `yline` instruction
 proc parser_parse_yline
     push INSTRUCTION_TYPE_YLINE
     push TOKEN_TYPE_YLINE
@@ -3407,6 +3463,7 @@ proc parser_parse_yline
     ret
 endp parser_parse_yline
 
+; Parses the `rect` instruction
 proc parser_parse_rect
     push INSTRUCTION_TYPE_RECT
     push TOKEN_TYPE_RECT
@@ -3414,6 +3471,7 @@ proc parser_parse_rect
     ret
 endp parser_parse_rect
 
+; Parses the `filledrect` instruction
 proc parser_parse_filledrect
     push INSTRUCTION_TYPE_FILLEDRECT
     push TOKEN_TYPE_FILLEDRECT
@@ -3421,6 +3479,7 @@ proc parser_parse_filledrect
     ret
 endp parser_parse_filledrect
 
+; Parses the `diagonalline` instruction
 proc parser_parse_diagonalline
     push INSTRUCTION_TYPE_DIAGONALLINE
     push TOKEN_TYPE_DIAGONALLINE
@@ -3428,6 +3487,7 @@ proc parser_parse_diagonalline
     ret
 endp parser_parse_diagonalline
 
+; Parses the `show` instruction
 proc parser_parse_show
     push INSTRUCTION_TYPE_SHOW
     push TOKEN_TYPE_SHOW
@@ -3435,6 +3495,7 @@ proc parser_parse_show
     ret
 endp parser_parse_show
 
+; Parses the `setcolor` instruction
 proc parser_parse_setcolor
     push INSTRUCTION_TYPE_SETCOLOR
     push TOKEN_TYPE_SETCOLOR
@@ -3442,8 +3503,7 @@ proc parser_parse_setcolor
     ret
 endp parser_parse_setcolor
 
-; FIXME: Check if it's okay to return 0 or is it possibly an allocated segment (not in code)
-; Returns a parsed instruction segment into ax, or 0 if not found
+; Returns a parsed instruction segment into ax, or 0 if no instruction found
 instruction_ptr = bp - 2
 backtrack = bp - 4
 proc parser_parse_instruction
@@ -3513,6 +3573,7 @@ proc parser_parse_instruction
     ret
 endp parser_parse_instruction
 
+; Try to parse a block of code: {instructions seperated by newline}
 proc parser_parse_block
     push bp
     mov bp, sp
@@ -3625,6 +3686,7 @@ no_code_remainer:
     ret
 endp parser_parse
 
+; Delete everything the parser stores
 proc parser_delete
     push ax
     push bx
@@ -3652,6 +3714,7 @@ endp parser_delete
 
 ; Number operations
 
+; Defines the `+` binary operator used in the number binary operations
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
@@ -3666,6 +3729,7 @@ proc operator_add_func
     ret 6
 endp operator_add_func
 
+; Defines the `-` binary operator used in the number binary operations
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
@@ -3680,6 +3744,7 @@ proc operator_sub_func
     ret 6
 endp operator_sub_func
 
+; Defines the `*` binary operator used in the number binary operations
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
@@ -3717,6 +3782,7 @@ proc operator_mul_func
     ret 6
 endp operator_mul_func
 
+; Defines the `/` binary operator used in the number binary operations
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
@@ -3760,6 +3826,7 @@ proc operator_div_func
     ret 6
 endp operator_div_func
 
+; Defines the `%` binary operator used in the number binary operations
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
@@ -3806,6 +3873,7 @@ proc operator_mod_func
     ret 6
 endp operator_mod_func
 
+; Defines the `<` binary operator used in the number binary operations
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
@@ -3829,6 +3897,7 @@ proc operator_cmp_smaller_func
     ret 6
 endp operator_cmp_smaller_func
 
+; Defines the `>` binary operator used in the number binary operations
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
@@ -3852,6 +3921,7 @@ proc operator_cmp_bigger_func
     ret 6
 endp operator_cmp_bigger_func
 
+; Defines the `<=` binary operator used in the number binary operations
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
@@ -3875,6 +3945,7 @@ proc operator_cmp_smaller_equals_func
     ret 6
 endp operator_cmp_smaller_equals_func
 
+; Defines the `>=` binary operator used in the number binary operations
 lhs = bp + 4
 rhs = bp + 6
 expr_ptr = bp + 8
@@ -3900,6 +3971,7 @@ endp operator_cmp_bigger_equals_func
 
 ; Number object
 
+; Shows a representation of the number object given as parameter
 object_ptr = bp + 4
 proc object_number_show
     push bp
@@ -3918,6 +3990,7 @@ proc object_number_show
 endp object_number_show
 
 ; Calls the function on the two number objects
+; Used for the other binary number operations
 operator_func = bp + 4
 lhs_value = bp + 6
 rhs_value = bp + 8
@@ -3925,7 +3998,7 @@ expr_ptr = bp + 10
 lhs_number = bp - 2
 rhs_number = bp - 4
 result = bp - 6
-proc object_number_operation
+proc object_number_binary_operation
     push bp
     mov bp, sp
     sub sp, 6
@@ -3953,9 +4026,9 @@ proc object_number_operation
     add sp, 6
     pop bp
     ret 8
-endp object_number_operation
+endp object_number_binary_operation
 
-; lhs + rhs
+; Define a `+` method/function for the number object
 lhs_value = bp + 4
 rhs_value = bp + 6
 expr_ptr = bp + 8
@@ -3967,13 +4040,13 @@ proc object_number_add
     push [rhs_value]
     push [lhs_value]
     push offset operator_add_func
-    call object_number_operation
+    call object_number_binary_operation
 
     pop bp
     ret 6
 endp object_number_add
 
-; lhs - rhs
+; Define a `-` method/function for the number object
 lhs_value = bp + 4
 rhs_value = bp + 6
 expr_ptr = bp + 8
@@ -3985,13 +4058,13 @@ proc object_number_sub
     push [rhs_value]
     push [lhs_value]
     push offset operator_sub_func
-    call object_number_operation
+    call object_number_binary_operation
 
     pop bp
     ret 6
 endp object_number_sub
 
-; lhs * rhs
+; Define a `*` method/function for the number object
 lhs_value = bp + 4
 rhs_value = bp + 6
 expr_ptr = bp + 8
@@ -4003,13 +4076,13 @@ proc object_number_mul
     push [rhs_value]
     push [lhs_value]
     push offset operator_mul_func
-    call object_number_operation
+    call object_number_binary_operation
 
     pop bp
     ret 6
 endp object_number_mul
 
-; lhs / rhs
+; Define a `/` method/function for the number object
 lhs_value = bp + 4
 rhs_value = bp + 6
 expr_ptr = bp + 8
@@ -4021,13 +4094,13 @@ proc object_number_div
     push [rhs_value]
     push [lhs_value]
     push offset operator_div_func
-    call object_number_operation
+    call object_number_binary_operation
 
     pop bp
     ret 6
 endp object_number_div
 
-; lhs % rhs
+; Define a `%` method/function for the number object
 lhs_value = bp + 4
 rhs_value = bp + 6
 expr_ptr = bp + 8
@@ -4039,13 +4112,13 @@ proc object_number_mod
     push [rhs_value]
     push [lhs_value]
     push offset operator_mod_func
-    call object_number_operation
+    call object_number_binary_operation
 
     pop bp
     ret 6
 endp object_number_mod
 
-; Is lhs == rhs?
+; Define a `==` method/function for two number objects
 lhs_value = bp + 4
 rhs_value = bp + 6
 lhs_number = bp - 2
@@ -4082,7 +4155,7 @@ proc object_number_eq
     ret 4
 endp object_number_eq
 
-; Is lhs < rhs?
+; Define a `<` method/function for the number object
 lhs_value = bp + 4
 rhs_value = bp + 6
 expr_ptr = bp + 8
@@ -4094,13 +4167,13 @@ proc object_number_smaller
     push [rhs_value]
     push [lhs_value]
     push offset operator_cmp_smaller_func
-    call object_number_operation
+    call object_number_binary_operation
 
     pop bp
     ret 6
 endp object_number_smaller
 
-; Is lhs > rhs?
+; Define a `>` method/function for the number object
 lhs_value = bp + 4
 rhs_value = bp + 6
 expr_ptr = bp + 8
@@ -4112,13 +4185,13 @@ proc object_number_bigger
     push [rhs_value]
     push [lhs_value]
     push offset operator_cmp_bigger_func
-    call object_number_operation
+    call object_number_binary_operation
 
     pop bp
     ret 6
 endp object_number_bigger
 
-; Is lhs <= rhs?
+; Define a `<=` method/function for the number object
 lhs_value = bp + 4
 rhs_value = bp + 6
 expr_ptr = bp + 8
@@ -4130,13 +4203,13 @@ proc object_number_smaller_eq
     push [rhs_value]
     push [lhs_value]
     push offset operator_cmp_smaller_equals_func
-    call object_number_operation
+    call object_number_binary_operation
 
     pop bp
     ret 6
 endp object_number_smaller_eq
 
-; Is lhs >= rhs?
+; Define a `>=` method/function for the number object
 lhs_value = bp + 4
 rhs_value = bp + 6
 expr_ptr = bp + 8
@@ -4148,12 +4221,13 @@ proc object_number_bigger_eq
     push [rhs_value]
     push [lhs_value]
     push offset operator_cmp_bigger_equals_func
-    call object_number_operation
+    call object_number_binary_operation
 
     pop bp
     ret 6
 endp object_number_bigger_eq
 
+; Define a negative (`-`) method/function for the number object
 object_ptr = bp + 4
 proc object_number_neg
     push bp
@@ -4172,7 +4246,7 @@ proc object_number_neg
     ret 2
 endp object_number_neg
 
-; Is number truthy?
+; Returns whether number is truthy
 object_ptr = bp + 4
 proc object_number_to_bool
     push bp
@@ -4240,7 +4314,7 @@ endp object_number_new
 
 ; String object
 
-; Print a string
+; Shows a representation of the string object given as parameter
 object_ptr = bp + 4
 proc object_string_show
     push bp
@@ -4261,7 +4335,7 @@ proc object_string_show
     ret 2
 endp object_string_show
 
-; Check if two strings are equal
+; Returns whether the two strings are equal
 lhs_ptr = bp + 4
 rhs_ptr = bp + 6
 proc object_string_eq
@@ -4345,6 +4419,7 @@ proc object_vector_get_y
     ret 2
 endp object_vector_get_y
 
+; Shows a representation of a vector
 object_ptr = bp + 4
 proc object_vector_show
     push bp
@@ -4375,6 +4450,7 @@ proc object_vector_show
     ret 2
 endp object_vector_show
 
+; Return whether the two argument vectors are equal
 lhs_ptr = bp + 4
 rhs_ptr = bp + 6
 lhs_number = bp - 2
@@ -4426,6 +4502,7 @@ endp object_vector_eq
 
 ; Interpreter procedures
 
+; Increment refcount of object
 object_type = bp + 4
 proc object_new
     push bp
@@ -4448,7 +4525,7 @@ proc object_new
     ret 2
 endp object_new
 
-; Increment refcount
+; Increment refcount of object
 object_ptr = bp + 4
 proc object_ref
     push bp
@@ -4508,7 +4585,7 @@ proc object_deref
     ret 2
 endp object_deref
 
-; Is object equal to another object
+; Returns whether an object is equal to another object
 lhs_value = bp + 4
 rhs_value = bp + 6
 lhs_type = bp - 2
@@ -4572,7 +4649,7 @@ proc object_eq
     ret 4
 endp object_eq
 
-; Is object truthy
+; Returns whether the object truthy (e.g 9 is truthy but 0 isn't)
 object_ptr = bp + 4
 proc object_to_bool
     push bp
@@ -4605,6 +4682,7 @@ proc object_to_bool
     ret 2
 endp object_to_bool
 
+; Evaluate a number expression and return the resulted number object
 expr_ptr = bp + 4
 proc expr_number_eval
     push bp
@@ -4624,6 +4702,7 @@ proc expr_number_eval
     ret 2
 endp expr_number_eval
 
+; Evaluate a variable expression and return the matched value (if we can't find the variable, we error): var
 expr_ptr = bp + 4
 proc expr_var_eval
     push bp
@@ -4651,6 +4730,7 @@ found_variable:
     ret 2
 endp expr_var_eval
 
+; General function to evaluate a binary expression (like + or *)
 expr_ptr = bp + 4
 func_offset = bp + 6
 lhs_value = bp - 2
@@ -4723,6 +4803,7 @@ proc expr_binary_eval
     ret 4
 endp expr_binary_eval
 
+; Evaluate a `+` expression and return the resulted value: a + b
 expr_ptr = bp + 4
 proc expr_add_eval
     push bp
@@ -4736,6 +4817,7 @@ proc expr_add_eval
     ret 2
 endp expr_add_eval
 
+; Evaluate a `-` expression and return the resulted value: a - b
 expr_ptr = bp + 4
 proc expr_sub_eval
     push bp
@@ -4749,6 +4831,7 @@ proc expr_sub_eval
     ret 2
 endp expr_sub_eval
 
+; Evaluate a `*` expression and return the resulted value: a * b
 expr_ptr = bp + 4
 proc expr_mul_eval
     push bp
@@ -4762,6 +4845,7 @@ proc expr_mul_eval
     ret 2
 endp expr_mul_eval
 
+; Evaluate a `/` expression and return the resulted value: a / b
 expr_ptr = bp + 4
 proc expr_div_eval
     push bp
@@ -4775,6 +4859,7 @@ proc expr_div_eval
     ret 2
 endp expr_div_eval
 
+; Evaluate a `%` expression and return the resulted value: a % b
 expr_ptr = bp + 4
 proc expr_mod_eval
     push bp
@@ -4788,6 +4873,7 @@ proc expr_mod_eval
     ret 2
 endp expr_mod_eval
 
+; Evaluate a `-value` expression and return the resulted value: -a
 expr_ptr = bp + 4
 neg_number = bp - 2
 proc expr_neg_eval
@@ -4832,6 +4918,7 @@ proc expr_neg_eval
     ret 2
 endp expr_neg_eval
 
+; Evaluate a `==` expression and return the resulted value: a == b
 expr_ptr = bp + 4
 lhs_value = bp - 2
 rhs_value = bp - 4
@@ -4872,6 +4959,7 @@ proc expr_cmp_equals_eval
     ret 2
 endp expr_cmp_equals_eval
 
+; Evaluate a `!=` expression and return the resulted value: a != b
 expr_ptr = bp + 4
 lhs_value = bp - 2
 rhs_value = bp - 4
@@ -4925,6 +5013,7 @@ proc expr_cmp_not_equal_eval
     ret 2
 endp expr_cmp_not_equal_eval
 
+; Evaluate a `<` expression and return the resulted value: a < b
 expr_ptr = bp + 4
 proc expr_cmp_smaller_eval
     push bp
@@ -4938,6 +5027,7 @@ proc expr_cmp_smaller_eval
     ret 2
 endp expr_cmp_smaller_eval
 
+; Evaluate a `>` expression and return the resulted value: a > b
 expr_ptr = bp + 4
 proc expr_cmp_bigger_eval
     push bp
@@ -4951,6 +5041,7 @@ proc expr_cmp_bigger_eval
     ret 2
 endp expr_cmp_bigger_eval
 
+; Evaluate a `<=` expression and return the resulted value: a <= b
 expr_ptr = bp + 4
 proc expr_cmp_smaller_equals_eval
     push bp
@@ -4964,6 +5055,7 @@ proc expr_cmp_smaller_equals_eval
     ret 2
 endp expr_cmp_smaller_equals_eval
 
+; Evaluate a `>=` expression and return the resulted value: a >= b
 expr_ptr = bp + 4
 proc expr_cmp_bigger_equals_eval
     push bp
@@ -4977,6 +5069,7 @@ proc expr_cmp_bigger_equals_eval
     ret 2
 endp expr_cmp_bigger_equals_eval
 
+; Evaluate a `&&` expression and return the resulted value: a && b
 expr_ptr = bp + 4
 lhs_ptr = bp - 2
 rhs_ptr = bp - 4
@@ -5030,6 +5123,7 @@ proc expr_and_eval
     ret 2
 endp expr_and_eval
 
+; Evaluate a `||` expression and return the resulted value: a || b
 expr_ptr = bp + 4
 lhs_ptr = bp - 2
 rhs_ptr = bp - 4
@@ -5088,6 +5182,7 @@ proc expr_or_eval
     ret 2
 endp expr_or_eval
 
+; Evaluate a `!` expression and return the resulted value: !a
 expr_ptr = bp + 4
 evaluated_object = bp - 2
 boolean_value = bp - 4
@@ -5128,6 +5223,7 @@ proc expr_not_eval
     ret 2
 endp expr_not_eval
 
+; Evaluate a string expression and return the resulted string: "string"
 expr_ptr = bp + 4
 source = bp - 2
 string_length = bp - 4
@@ -5167,6 +5263,7 @@ proc expr_string_eval
     ret 2
 endp expr_string_eval
 
+; Evaluate a vector expression and return the resulted vector: (x, y)
 expr_ptr = bp + 4
 x_value = bp - 2
 y_value = bp - 4
@@ -5257,6 +5354,7 @@ proc expr_vector_eval
     ret 2
 endp expr_vector_eval
 
+; Evaluate an expression from a segment parameter and return the result object or error
 expr_ptr = bp + 4
 proc expr_eval
     push bp
@@ -5395,6 +5493,7 @@ end_choice_eval:
     ret 2
 endp expr_eval
 
+; Execute the `=` code instruction (var = expr)
 instruction_ptr = bp + 4
 proc instruction_assign_execute
     push bp
@@ -5419,6 +5518,7 @@ proc instruction_assign_execute
     ret 2
 endp instruction_assign_execute
 
+; Execute the `if` code instruction
 instrcution_ptr = bp + 4
 evaluated_object = bp - 2
 proc instruction_if_execute
@@ -5469,6 +5569,7 @@ proc instruction_if_execute
     ret 2
 endp instruction_if_execute
 
+; Execute the `loop` code instruction
 instruction_ptr = bp + 4
 evaluated_object = bp - 2
 proc instruction_loop_execute
@@ -5512,6 +5613,10 @@ proc instruction_loop_execute
     ret 2
 endp instruction_loop_execute
 
+; Execute an instruction that takes a position vector and size (number) as parameters
+; Syntax: instruction (x, y), size
+; This function takes information that helps it run in a general way but provide
+; specific functionallity
 instruction_ptr = bp + 4
 exec_func = bp + 6
 validate_func = bp + 8
@@ -5621,6 +5726,7 @@ proc instruction_line_execute
     ret 6
 endp instruction_line_execute
 
+; Exectue the `xline` code instruction
 instruction_ptr = bp + 4
 proc instruction_xline_execute
     push bp
@@ -5635,6 +5741,7 @@ proc instruction_xline_execute
     ret 2
 endp instruction_xline_execute
 
+; Exectue the `yline` code instruction
 instruction_ptr = bp + 4
 proc instruction_yline_execute
     push bp
@@ -5649,6 +5756,10 @@ proc instruction_yline_execute
     ret 2
 endp instruction_yline_execute
 
+; Execute an instruction that takes position and size vectors as parameters
+; Syntax: instruction (x, y), (w, h)
+; This function takes information that helps it run in a general way but provide
+; specific functionallity
 instruction_ptr = bp + 4
 exec_func = bp + 6
 arg1_value = bp - 2
@@ -5764,6 +5875,7 @@ proc instruction_position_size_execute
     ret 4
 endp instruction_position_size_execute
 
+; Exectue the `rect` code instruction
 instruction_ptr = bp + 4
 proc instruction_rect_execute
     push bp
@@ -5777,6 +5889,7 @@ proc instruction_rect_execute
     ret 2
 endp instruction_rect_execute
 
+; Exectue the `filledrect` code instruction
 instruction_ptr = bp + 4
 proc instruction_filledrect_execute
     push bp
@@ -5790,6 +5903,7 @@ proc instruction_filledrect_execute
     ret 2
 endp instruction_filledrect_execute
 
+; Exectue the `diagonalline` code instruction
 instruction_ptr = bp + 4
 proc instruction_diagonalline_execute
     push bp
@@ -5803,6 +5917,7 @@ proc instruction_diagonalline_execute
     ret 2
 endp instruction_diagonalline_execute
 
+; Exectue the `show` code instruction
 instruction_ptr = bp + 4
 proc instruction_show_execute
     push bp
@@ -5848,6 +5963,7 @@ proc instruction_show_execute
     ret 2
 endp instruction_show_execute
 
+; Exectue the `setcolor` code instruction
 instruction_ptr = bp + 4
 arg_ptr = bp - 2
 proc instruction_setcolor_execute
@@ -5907,6 +6023,7 @@ proc instruction_setcolor_execute
     ret 2
 endp instruction_setcolor_execute
 
+; Exectue an instruction segment given as a parameter
 instruction_ptr = bp + 4
 proc instruction_execute
     push bp
@@ -5996,6 +6113,7 @@ proc instruction_execute
     ret 2
 endp instruction_execute
 
+; Delete a block segment given as a parameter
 block_ptr = bp + 4
 proc block_delete
     push bp
@@ -6031,6 +6149,7 @@ proc block_delete
     ret 2
 endp block_delete
 
+; Execute a block segment given as a parameter
 block_ptr = bp + 4
 proc block_execute
     push bp
@@ -6063,6 +6182,7 @@ proc block_execute
     ret 2
 endp block_execute
 
+; Execute all of the interpreter's instructions
 proc interpreter_execute
     push ax
     push bx
@@ -6087,6 +6207,7 @@ end_execute_instruction:
     ret
 endp interpreter_execute
 
+; Set a variable in the interpreter
 key = bp + 4
 value = bp + 6
 proc interpreter_set_variable
@@ -6142,6 +6263,7 @@ proc interpreter_set_variable
     ret 4
 endp interpreter_set_variable
 
+; Get a variable from the interpreter
 name_ptr = bp + 4
 proc interpreter_get_variable
     push bp
@@ -6185,6 +6307,8 @@ proc interpreter_get_variable
     ret 2
 endp interpreter_get_variable
 
+; Print a minimized RuntimeError
+; This version shows no line/column information and does not show the line the error occured in
 message_ptr = bp + 4
 proc interpreter_runtime_error_no_state
     push bp
@@ -6217,6 +6341,7 @@ proc interpreter_runtime_error_no_state
     ret 2
 endp interpreter_runtime_error_no_state
 
+; Writes a message in the format "RuntimeError [line l, column c]: Error message" and exits
 message_ptr = bp + 4
 index = bp + 6
 proc interpreter_runtime_error
@@ -6242,6 +6367,7 @@ endp interpreter_runtime_error
 
 ; Graphics related
 
+; Convert a pair of x and y coordinates to an index we can later use to access the screen buffer
 start_x = bp + 4
 start_y = bp + 6
 proc graphics_convert_position_to_index
@@ -6354,7 +6480,7 @@ proc graphics_validate_start_size_vectors
     ret 8
 endp graphics_validate_start_size_vectors
 
-
+; Validates the arguments for an `xline` instructions
 start_x = bp + 4
 start_y = bp + 6
 line_length = bp + 8
@@ -6372,6 +6498,7 @@ proc graphics_validate_xline
     ret 6
 endp graphics_validate_xline
 
+; Validates the arguments for a `yline` instructions
 start_x = bp + 4
 start_y = bp + 6
 line_length = bp + 8
@@ -6496,7 +6623,7 @@ proc graphics_show_yline
     ret 6
 endp graphics_show_yline
 
-; Show non-filled rectangle
+; Show a rectangle that's not filled
 start_x = bp + 4
 start_y = bp + 6
 rect_width = bp + 8
@@ -6539,7 +6666,7 @@ proc graphics_show_rect
     ret 8
 endp graphics_show_rect
 
-; Show filled rectangle
+; Show a filled rectangle
 start_x = bp + 4
 start_y = bp + 6
 rect_width = bp + 8
