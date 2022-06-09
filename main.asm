@@ -6368,6 +6368,32 @@ proc interpreter_runtime_error
     ret 4
 endp interpreter_runtime_error
 
+; Remove data related to the interpreter
+proc interpreter_delete
+    push bx
+    push cx
+
+    ; Remove variables
+    mov cx, 0
+    lea bx, [variables]
+@@loop_variables:
+    cmp cx, [amount_variables]
+    je @@end_loop_variables
+
+    push [bx]
+    call instruction_delete
+
+    inc cx
+    add bx, 2
+    jmp @@loop_variables
+
+@@end_loop_variables:
+
+    pop cx
+    pop bx
+    ret
+endp interpreter_delete
+
 ; Graphics related
 
 ; Convert a pair of x and y coordinates to an index we can later use to access the screen buffer
@@ -6877,6 +6903,7 @@ start:
 
     call parser_parse
     call interpreter_execute
+    call interpreter_delete
     call parser_delete
 
     call close_file
