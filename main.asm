@@ -3519,11 +3519,6 @@ proc parser_parse_block
     push bx
     push es
 
-    ; FIXME: Be able to extend the list
-    push 2 * (7 + 1)
-    call heap_alloc
-    mov es, ax
-
     push TOKEN_TYPE_LEFT_BRACE
     call parser_match
     test ax, ax
@@ -3531,6 +3526,11 @@ proc parser_parse_block
 
     push 0 ; Don't error if we don't match the newline
     call parser_expect_newline
+
+    ; FIXME: Be able to extend the list
+    push 2 * (7 + 1)
+    call heap_alloc
+    mov es, ax
 
     mov bx, 0 ; Offset
 parse_block_instruction:
