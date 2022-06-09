@@ -312,6 +312,7 @@ DATASEG
     runtime_error_expected_number db "Expected number", 0
     runtime_error_expected_vector db "Expected vector", 0
     runtime_error_invalid_argument_values db "Invalid argument values", 0
+    runtime_error_allocation_failure db "Allocation failure", 0
 
 
     ; Panic related stuff
@@ -619,7 +620,8 @@ exact_fit:
     jnc allocation_success
 
     ; If we got here, we had an allocation failure
-    mov ax, 0
+    push offset runtime_error_allocation_failure
+    call interpreter_runtime_error_no_state
 
 allocation_success:
 
