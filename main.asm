@@ -270,7 +270,7 @@ DATASEG
     ; TODO: Make this a hashmap?
     ; FIXME: Allows up to 16 variables
     variables dw 10h * 2 dup(?)
-    amount_variables db 0
+    amount_variables dw 0
     ; Interpreter currently used color
     graphics_color db 0Fh
 
@@ -4643,8 +4643,7 @@ proc expr_var_eval
     mov ax, [expr_ptr]
     mov es, ax
 
-    mov ax, [es:EXPR_VAR_OFF_NAME]
-    push ax
+    push [es:EXPR_VAR_OFF_NAME]
     call interpreter_get_variable
 
     test ax, ax
@@ -4704,6 +4703,7 @@ proc expr_binary_eval
     cmp bx, [rhs_type]
     je @@type_match
 
+    ; Reload expr_ptr into es because we overriden es
     mov ax, [expr_ptr]
     mov es, ax
     push [es:EXPR_OFF_FILE_INDEX]
@@ -5495,7 +5495,7 @@ proc instruction_loop_execute
     push [es:INSTRUCTION_LOOP_OFF_EXPR]
     call expr_eval
 
-    mov [word ptr evaluated_object], ax
+    mov [evaluated_object], ax
 
     push [evaluated_object]
     call object_to_bool ; Returns into ax
@@ -6748,6 +6748,7 @@ start:
     mov ax, es
     mov [PSP_segment], ax
 
+    ; Set screen to graphic mode 320x200
     mov ah, 0
     mov al, 13h
     int 10h
