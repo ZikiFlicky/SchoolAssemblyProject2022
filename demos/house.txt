@@ -1,0 +1,15 @@
+setcolor 14 # Light yellow
+filledrect (50, 50), (60, 40)
+setcolor 6 # Brown
+filledrect (100, 90), (-10, -20)
+setcolor 0 # Black
+filledrect (99, 81), (-2, -2)
+setcolor 4 # Red
+diagonalline (51, 49), (30, -20)
+diagonalline (110, 49), (-30, -20)
+setcolor 0 # Black
+filledrect (60, 62), (15, 15)
+setcolor 15 # White
+rect (60, 62), (15, 15) # Border
+yline (67, 62), 15 # Border
+xline (60, 69), 15 # Border
