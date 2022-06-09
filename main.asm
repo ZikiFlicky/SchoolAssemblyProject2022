@@ -2157,12 +2157,12 @@ proc instruction_delete
     push [es:INSTRUCTION_IF_OFF_BLOCK]
     call block_delete
     cmp [word ptr es:INSTRUCTION_IF_OFF_ELSE_BLOCK], 0
-    je @@if_no_else_block
+    je @@no_else_block
     ; If we got here we have an else block
     push [es:INSTRUCTION_IF_OFF_ELSE_BLOCK]
     call block_delete
 
-@@if_no_else_block:
+@@no_else_block:
     jmp @@choice_end
 
 @@choice_loop:
@@ -3038,23 +3038,24 @@ proc parser_parse_expr
     ret
 endp parser_parse_expr
 
-key_token = bp - TOKEN_SIZE
-expr_ptr = bp - TOKEN_SIZE - 2
-key_segment = bp - TOKEN_SIZE - 2 - 2
+; Parse the assignment instruction (var = expr)
+expr_ptr = bp - 2
+key_ptr = bp - 4
+key_token = bp - 4 - TOKEN_SIZE
 proc parser_parse_assignment
     push bp
     mov bp, sp
-    sub sp, TOKEN_SIZE + 2 + 2
+    sub sp, 4 + TOKEN_SIZE
     push es
 
     push TOKEN_TYPE_VAR
     call parser_match
     test ax, ax
-    jnz assignment_var_found
+    jnz @@var_found
 
-    jmp not_parse_assignment
+    jmp @@parse_failed
 
-assignment_var_found:
+@@var_found:
 
     ; Copy current token into key_token
     lea ax, [key_token]
@@ -3079,7 +3080,7 @@ assignment_var_found:
     call token_set
     ; Convert to cstr (NUL-terminated string)
     call token_to_cstr
-    mov [key_segment], ax
+    mov [key_ptr], ax
 
     ; Create new instruction with type Assign
     push INSTRUCTION_TYPE_ASSIGN
@@ -3088,7 +3089,7 @@ assignment_var_found:
     ; Make es point to the new instruction segment
     mov es, ax
     ; Store the key in the instruction
-    mov ax, [key_segment]
+    mov ax, [key_ptr]
     mov [es:INSTRUCTION_ASSIGN_OFF_KEY], ax
     ; Store the number in the instruction
     mov ax, [expr_ptr]
@@ -3097,22 +3098,22 @@ assignment_var_found:
     ; Move es back to ax so we can return the pointer to the instruction
     mov ax, es
 
-    jmp end_parse_assignment
+    jmp @@end_parse
 
 @@error_no_equal_sign:
 @@error_no_value:
     push [file_idx]
     push offset parser_error_invalid_token
     call parser_error
-    jmp end_parse_assignment
+    jmp @@end_parse
 
-not_parse_assignment:
+@@parse_failed:
     mov ax, 0
 
-end_parse_assignment:
+@@end_parse:
 
     pop es
-    add sp, TOKEN_SIZE + 2 + 2
+    add sp, 4 + TOKEN_SIZE
     pop bp
     ret
 endp parser_parse_assignment
@@ -5415,11 +5416,11 @@ proc instruction_assign_execute
     mov es, ax
 
     ; Eval expr and return value into ax
-    push [es:INSTRUCTION_ASSIGN_OFF_EXPR] ; value
-    call expr_eval
+    push [es:INSTRUCTION_ASSIGN_OFF_EXPR] ; Push the expr segment
+    call expr_eval ; Evaluate the expr
 
     push ax ; Push the value
-    push [es:INSTRUCTION_ASSIGN_OFF_KEY] ; key
+    push [es:INSTRUCTION_ASSIGN_OFF_KEY] ; Push the key segment
     call interpreter_set_variable
 
     pop es
@@ -6111,6 +6112,7 @@ proc interpreter_set_variable
     cmp cx, [word ptr amount_variables]
     je @@add_new_variable ; Add a new variable
 
+    ; Compare the key parameter with the key stored in the `variables` variable
     push [key]
     push [bx + 0]
     call cstrs_eq
@@ -6155,11 +6157,12 @@ proc interpreter_get_variable
     push bp
     mov bp, sp
     push bx
+    push cx
 
-    mov ax, 0
+    mov cx, 0
     lea bx, [variables]
 @@find_variable:
-    cmp ax, [word ptr amount_variables]
+    cmp cx, [word ptr amount_variables]
     je @@not_found_variable
 
     push [bx + 0]
@@ -6169,11 +6172,12 @@ proc interpreter_get_variable
     test ax, ax
     jnz @@found_variable
 
-    inc ax
+    inc cx
     add bx, 4
     jmp @@find_variable
 
 @@found_variable:
+    ; Get the object
     mov ax, [bx + 2]
     ; Add reference
     push ax
@@ -6185,6 +6189,7 @@ proc interpreter_get_variable
 
 @@end_find_variable:
 
+    pop cx
     pop bx
     pop bp
     ret 2
