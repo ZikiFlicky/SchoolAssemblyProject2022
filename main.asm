@@ -411,6 +411,9 @@ not_lowercase:
     jmp character_is_var_start
 
 not_uppercase:
+    cmp al, '_'
+    je character_is_var_start
+
     mov ax, 0
     jmp character_var_start_check_end
 
