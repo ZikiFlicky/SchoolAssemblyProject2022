@@ -217,7 +217,7 @@ DATASEG
                        dw offset object_number_to_bool
                        dw offset object_number_show
 
-    object_string_type dw offset object_string_delete
+    object_string_type dw 0
                        dw 0 ; TODO: Add this
                        dw 0
                        dw 0
@@ -2056,6 +2056,8 @@ proc expr_delete
     je @@choice_binary
     cmp al, EXPR_TYPE_NEG
     je @@choice_single
+    cmp al, EXPR_TYPE_STRING
+    je @@choice_sting
 
     ; We don't need to remove anything
     jmp @@choice_end
@@ -2075,6 +2077,11 @@ proc expr_delete
 @@choice_single:
     push [es:EXPR_SINGLE_OFF_INNER]
     call expr_delete
+    jmp @@choice_end
+
+@@choice_sting:
+    push [es:EXPR_STRING_OFF_SOURCE]
+    call heap_free
 
 @@choice_end:
 
@@ -4232,25 +4239,6 @@ proc object_number_new
 endp object_number_new
 
 ; String object
-
-object_ptr = bp + 4
-proc object_string_delete
-    push bp
-    mov bp, sp
-    push ax
-    push es
-
-    mov ax, [object_ptr]
-    mov es, ax
-
-    push [es:OBJECT_STRING_OFF_SOURCE]
-    call heap_free
-
-    pop es
-    pop ax
-    pop bp
-    ret 2
-endp object_string_delete
 
 ; Print a string
 object_ptr = bp + 4
