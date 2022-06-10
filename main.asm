@@ -6686,7 +6686,7 @@ start:
     mov al, 03h
     int 10h
 
-    ; Exit program
+    ; Exit program gracefully (with exit code 0)
     mov ah, 4Ch
     mov al, 0
     int 21h
