@@ -1030,7 +1030,7 @@ proc read_bytes
 
     ; if read less than wanted
     cmp ax, [amount_bytes]
-    jl @@had_error
+    jb @@had_error
 
     mov ax, [amount_bytes]
     add [file_idx], ax
@@ -1103,7 +1103,7 @@ proc file_read_newline
 endp file_read_newline
 
 ; Returns the line and column into ax and bx (respectively) given the parameter file index
-; Used for errors
+; Used for error functions
 index = bp + 4
 backtrack = bp - 2
 line = bp - 4
@@ -1128,7 +1128,7 @@ proc file_get_line_col_of_index
     mov cx, 0
 @@read_file:
     cmp cx, [index]
-    jge @@end_read_file
+    je @@end_read_file
     call file_read_newline
     test ax, ax
     jnz @@read_newline
@@ -1340,7 +1340,7 @@ loop_digits:
 
     inc cx
     cmp cx, [token_length]
-    jl loop_digits
+    jb loop_digits
 
     mov ax, [number]
 
@@ -1384,7 +1384,7 @@ proc lex_newline
 
 @@not_found_newline:
     cmp [word ptr times_newline], 0
-    jg @@had_newlines
+    ja @@had_newlines
 
     mov ax, 0
     jmp @@finish_newline_lex
@@ -1591,7 +1591,7 @@ proc lex_single_keyword
 
     inc cx
     cmp cx, [keyword_length]
-    jl @@keyword_char_cmp
+    jb @@keyword_char_cmp
 
     ; If we got here, we succeeded
     mov al, [keyword_token_type]
@@ -5966,7 +5966,7 @@ proc interpreter_execute
     lea bx, [parsed_instructions]
 execute_instruction:
     cmp ax, [amount_instructions]
-    jge end_execute_instruction
+    je end_execute_instruction
 
     push [bx]
     call instruction_execute
