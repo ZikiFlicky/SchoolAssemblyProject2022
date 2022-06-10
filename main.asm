@@ -6481,10 +6481,14 @@ proc graphics_show_filledrect
     push cx
 
     ; Decide which function to call for better speed
-    ; Less calls means less overhead
-    mov ax, [rect_width]
-    cmp ax, [rect_height]
-    jl @@draw_by_width
+    ; Less calls means less overhead although same amount of writes
+    push [rect_width]
+    call number_abs
+    mov cx, ax
+    push [rect_height]
+    call number_abs
+    cmp ax, cx ; Is abs(height) < abs(width)
+    jb @@draw_height_times
 
     push [rect_width]
     call number_get_direction
@@ -6503,7 +6507,7 @@ proc graphics_show_filledrect
     add cx, [number_direction]
     jmp @@draw_vertical
 
-@@draw_by_width:
+@@draw_height_times:
 
     push [rect_height]
     call number_get_direction
