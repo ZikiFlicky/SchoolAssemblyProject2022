@@ -179,6 +179,30 @@ DATASEG
 
     INSTRUCTION_MAX_SIZE = 9
 
+    ; Binary operator information (maps token types to expr types)
+    parser_product_operators db TOKEN_TYPE_STAR, EXPR_TYPE_MUL
+                             db TOKEN_TYPE_SLASH, EXPR_TYPE_DIV
+                             db TOKEN_TYPE_PERCENT, EXPR_TYPE_MOD
+    AMOUNT_PARSER_PRODUCT_OPERATORS = 3
+
+    parser_sum_operators db TOKEN_TYPE_PLUS, EXPR_TYPE_ADD
+                         db TOKEN_TYPE_MINUS, EXPR_TYPE_SUB
+    AMOUNT_PARSER_SUM_OPERATORS = 2
+
+    parser_cmp_operators db TOKEN_TYPE_LESS_THAN, EXPR_TYPE_CMP_SMALLER
+                         db TOKEN_TYPE_GREATER_THAN, EXPR_TYPE_CMP_BIGGER
+                         db TOKEN_TYPE_LESS_EQU, EXPR_TYPE_CMP_SMALLER_EQUALS
+                         db TOKEN_TYPE_GREATER_EQU, EXPR_TYPE_CMP_BIGGER_EQUALS
+                         db TOKEN_TYPE_EQU_EQU, EXPR_TYPE_CMP_EQUALS
+                         db TOKEN_TYPE_EXCLAMATION_MARK_EQU, EXPR_TYPE_CMP_NOT_EQUAL
+    AMOUNT_PARSER_CMP_OPERATORS = 5
+
+    parser_or_operators db TOKEN_TYPE_PIPE_PIPE, EXPR_TYPE_OR
+    AMOUNT_PARSER_OR_OPERATORS = 1
+
+    parser_and_operators db TOKEN_TYPE_AMPERSAND_AMPERSAND, EXPR_TYPE_AND
+    AMOUNT_PARSER_AND_OPERATORS = 1
+
     ; Stores parsed instructions
     ; FIXME: This can overflow + only allows a certain amount of instructions
     parsed_instructions dw 10h dup(?)
@@ -2710,18 +2734,24 @@ proc parser_parse_expr_single
     ret
 endp parser_parse_expr_single
 
-; Parses the `*` and `/` expressions
+; General function to parse binary expressions
+operator_info = bp + 4
+amount_operators = bp + 6
+child_function = bp + 8 ; Function that parses the lhs and rhs of this expr
 left_ptr = bp - 2
 right_ptr = bp - 4
 new_expr_type = bp - 6
 backtrack = bp - 8
-proc parser_parse_expr_product
+proc parser_parse_expr_precedence
     push bp
     mov bp, sp
     sub sp, 8
+    push bx
+    push cx
     push es
 
-    call parser_parse_expr_single
+    mov ax, [child_function]
+    call ax
     mov [left_ptr], ax
     test ax, ax
     jnz @@parse_expr_loop
@@ -2733,30 +2763,31 @@ proc parser_parse_expr_product
     mov ax, [file_idx]
     mov [backtrack], ax
 
-    mov [word ptr new_expr_type], EXPR_TYPE_MUL
-    push TOKEN_TYPE_STAR
+    mov cx, [amount_operators]
+    mov bx, [operator_info]
+@@loop_operators:
+    mov al, [bx + 0]
+    cbw
+    push ax
     call parser_match
     test ax, ax
-    jnz @@matched
+    jnz @@matched ; If matched
 
-    mov [word ptr new_expr_type], EXPR_TYPE_DIV
-    push TOKEN_TYPE_SLASH
-    call parser_match
-    test ax, ax
-    jnz @@matched
+    add bx, 2
+    loop @@loop_operators
 
-    mov [word ptr new_expr_type], EXPR_TYPE_MOD
-    push TOKEN_TYPE_PERCENT
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
+    ; If we got here we didn't match so we can finish parsing
     mov ax, [left_ptr]
     jmp @@parse_expr_finish
 
 @@matched:
+    mov al, [bx + 1] ; Get expr-type
+    cbw
+    mov [new_expr_type], ax
+
     ; Try to parse the expr after the operator
-    call parser_parse_expr_single
+    mov ax, [child_function]
+    call ax
     test ax, ax
     jz @@error_expected_expr
     mov [right_ptr], ax
@@ -2785,314 +2816,55 @@ proc parser_parse_expr_product
 @@parse_expr_finish:
 
     pop es
+    pop cx
+    pop bx
     add sp, 8
     pop bp
+    ret 6
+endp parser_parse_expr_precedence
+
+; Parses the `*` and `/` expressions
+proc parser_parse_expr_product
+    push offset parser_parse_expr_single
+    push AMOUNT_PARSER_PRODUCT_OPERATORS
+    push offset parser_product_operators
+    call parser_parse_expr_precedence
     ret
 endp parser_parse_expr_product
 
 ; Parses the `+` and `-` expressions
-left_ptr = bp - 2
-right_ptr = bp - 4
-new_expr_type = bp - 6
-backtrack = bp - 8
 proc parser_parse_expr_sum
-    push bp
-    mov bp, sp
-    sub sp, 8
-    push es
-
-    call parser_parse_expr_product
-    mov [left_ptr], ax
-    test ax, ax
-    jnz @@parse_expr_loop
-
-    jmp @@parse_expr_failed
-
-@@parse_expr_loop:
-    ; Store the index of the operator for the expr index
-    mov ax, [file_idx]
-    mov [backtrack], ax
-
-    mov [word ptr new_expr_type], EXPR_TYPE_ADD
-    push TOKEN_TYPE_PLUS
-    call parser_match
-    test ax, ax
-    jnz @@matched
-    mov [word ptr new_expr_type], EXPR_TYPE_SUB
-    push TOKEN_TYPE_MINUS
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
-    mov ax, [left_ptr]
-    jmp @@parse_expr_finish
-
-@@matched:
-    ; Try to parse the expr after the operator
-    call parser_parse_expr_product
-    test ax, ax
-    jz @@error_expected_expr
-    mov [right_ptr], ax
-
-    ; Create a new expr and put the information into it
-    push [backtrack]
-    push [new_expr_type]
-    call expr_new
-    mov es, ax
-    mov ax, [left_ptr]
-    mov [es:EXPR_BINARY_OFF_LHS], ax
-    mov ax, [right_ptr]
-    mov [es:EXPR_BINARY_OFF_RHS], ax
-    mov [left_ptr], es
-
-    jmp @@parse_expr_loop
-
-@@error_expected_expr:
-    push [file_idx]
-    push offset parser_error_syntax_error
-    call parser_error
-
-@@parse_expr_failed:
-    mov ax, 0
-
-@@parse_expr_finish:
-
-    pop es
-    add sp, 8
-    pop bp
+    push offset parser_parse_expr_product
+    push AMOUNT_PARSER_SUM_OPERATORS
+    push offset parser_sum_operators
+    call parser_parse_expr_precedence
     ret
 endp parser_parse_expr_sum
 
 ; Parses the `<`, `>`, `<=`, `>=`, `==` and `!=` expressions
-left_ptr = bp - 2
-right_ptr = bp - 4
-new_expr_type = bp - 6
-backtrack = bp - 8
 proc parser_parse_expr_cmp
-    push bp
-    mov bp, sp
-    sub sp, 8
-    push es
-
-    call parser_parse_expr_sum
-    mov [left_ptr], ax
-    test ax, ax
-    jnz @@parse_expr_loop
-
-    jmp @@parse_expr_failed
-
-@@parse_expr_loop:
-    ; Store the index of the operator for the expr index
-    mov ax, [file_idx]
-    mov [backtrack], ax
-
-    mov [word ptr new_expr_type], EXPR_TYPE_CMP_EQUALS
-    push TOKEN_TYPE_EQU_EQU
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
-    mov [word ptr new_expr_type], EXPR_TYPE_CMP_NOT_EQUAL
-    push TOKEN_TYPE_EXCLAMATION_MARK_EQU
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
-    mov [word ptr new_expr_type], EXPR_TYPE_CMP_SMALLER
-    push TOKEN_TYPE_LESS_THAN
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
-    mov [word ptr new_expr_type], EXPR_TYPE_CMP_BIGGER
-    push TOKEN_TYPE_GREATER_THAN
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
-    mov [word ptr new_expr_type], EXPR_TYPE_CMP_SMALLER_EQUALS
-    push TOKEN_TYPE_LESS_EQU
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
-    mov [word ptr new_expr_type], EXPR_TYPE_CMP_BIGGER_EQUALS
-    push TOKEN_TYPE_GREATER_EQU
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
-    mov ax, [left_ptr]
-    jmp @@parse_expr_finish
-
-@@matched:
-    ; Try to parse the expr after the operator
-    call parser_parse_expr_sum
-    test ax, ax
-    jz @@error_expected_expr
-    mov [right_ptr], ax
-
-    ; Create a new expr and put the information into it
-    push [backtrack]
-    push [new_expr_type]
-    call expr_new
-    mov es, ax
-    mov ax, [left_ptr]
-    mov [es:EXPR_BINARY_OFF_LHS], ax
-    mov ax, [right_ptr]
-    mov [es:EXPR_BINARY_OFF_RHS], ax
-    mov [left_ptr], es
-
-    jmp @@parse_expr_loop
-
-@@error_expected_expr:
-    push [file_idx]
-    push offset parser_error_syntax_error
-    call parser_error
-
-@@parse_expr_failed:
-    mov ax, 0
-
-@@parse_expr_finish:
-
-    pop es
-    add sp, 8
-    pop bp
+    push offset parser_parse_expr_sum
+    push AMOUNT_PARSER_CMP_OPERATORS
+    push offset parser_cmp_operators
+    call parser_parse_expr_precedence
     ret
 endp parser_parse_expr_cmp
 
 ; Parse the `&&` expression
-left_ptr = bp - 2
-right_ptr = bp - 4
-new_expr_type = bp - 6
-backtrack = bp - 8
 proc parser_parse_expr_and
-    push bp
-    mov bp, sp
-    sub sp, 8
-    push es
-
-    call parser_parse_expr_cmp
-    mov [left_ptr], ax
-    test ax, ax
-    jnz @@parse_expr_loop
-
-    jmp @@parse_expr_failed
-
-@@parse_expr_loop:
-    ; Store the index of the operator for the expr index
-    mov ax, [file_idx]
-    mov [backtrack], ax
-
-    mov [word ptr new_expr_type], EXPR_TYPE_AND
-    push TOKEN_TYPE_AMPERSAND_AMPERSAND
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
-    mov ax, [left_ptr]
-    jmp @@parse_expr_finish
-
-@@matched:
-    ; Try to parse the expr after the operator
-    call parser_parse_expr_cmp
-    test ax, ax
-    jz @@error_expected_expr
-    mov [right_ptr], ax
-
-    ; Create a new expr and put the information into it
-    push [backtrack]
-    push [new_expr_type]
-    call expr_new
-    mov es, ax
-    mov ax, [left_ptr]
-    mov [es:EXPR_BINARY_OFF_LHS], ax
-    mov ax, [right_ptr]
-    mov [es:EXPR_BINARY_OFF_RHS], ax
-    mov [left_ptr], es
-
-    jmp @@parse_expr_loop
-
-@@error_expected_expr:
-    push [file_idx]
-    push offset parser_error_syntax_error
-    call parser_error
-
-@@parse_expr_failed:
-    mov ax, 0
-
-@@parse_expr_finish:
-
-    pop es
-    add sp, 8
-    pop bp
+    push offset parser_parse_expr_cmp
+    push AMOUNT_PARSER_AND_OPERATORS
+    push offset parser_and_operators
+    call parser_parse_expr_precedence
     ret
 endp parser_parse_expr_and
 
 ; Parse the `||` expression
-left_ptr = bp - 2
-right_ptr = bp - 4
-new_expr_type = bp - 6
-backtrack = bp - 8
 proc parser_parse_expr_or
-    push bp
-    mov bp, sp
-    sub sp, 8
-    push es
-
-    call parser_parse_expr_and
-    mov [left_ptr], ax
-    test ax, ax
-    jnz @@parse_expr_loop
-
-    jmp @@parse_expr_failed
-
-@@parse_expr_loop:
-    mov ax, [file_idx]
-    mov [backtrack], ax
-
-    mov [word ptr new_expr_type], EXPR_TYPE_OR
-    push TOKEN_TYPE_PIPE_PIPE
-    call parser_match
-    test ax, ax
-    jnz @@matched
-
-    mov ax, [left_ptr]
-    jmp @@parse_expr_finish
-
-@@matched:
-    ; Try to parse the expr after the operator
-    call parser_parse_expr_and
-    test ax, ax
-    jz @@error_expected_expr
-    mov [right_ptr], ax
-
-    ; Create a new expr and put the information into it
-    push [backtrack]
-    push [new_expr_type]
-    call expr_new
-    mov es, ax
-    mov ax, [left_ptr]
-    mov [es:EXPR_BINARY_OFF_LHS], ax
-    mov ax, [right_ptr]
-    mov [es:EXPR_BINARY_OFF_RHS], ax
-    mov [left_ptr], es
-
-    jmp @@parse_expr_loop
-
-@@error_expected_expr:
-    push [file_idx]
-    push offset parser_error_syntax_error
-    call parser_error
-
-@@parse_expr_failed:
-    mov ax, 0
-
-@@parse_expr_finish:
-
-    pop es
-    add sp, 8
-    pop bp
+    push offset parser_parse_expr_and
+    push AMOUNT_PARSER_OR_OPERATORS
+    push offset parser_or_operators
+    call parser_parse_expr_precedence
     ret
 endp parser_parse_expr_or
 
