@@ -632,7 +632,7 @@ end_divide_number:
     ret 2
 endp print_word
 
-; FIXME: The page-size calculation
+; FIXME: The page-size calculation can be optimized so that they happen at compile-time
 ; Allocate `amount` bytes and return the segment of the allocated block
 amount = bp + 4
 proc heap_alloc
@@ -1895,8 +1895,6 @@ proc lexer_error
     call show_file_error
 
     call wait_for_user_end_execution
-
-    ; FIXME: We shouldn't exit here, but this is our only way now
     call exit_fail
 
     pop ax
@@ -2282,7 +2280,6 @@ proc parser_error
     call show_file_error
 
     call wait_for_user_end_execution
-    ; FIXME: We shouldn't exit here, but this is our only way now
     call exit_fail
 
     pop ax
@@ -6105,7 +6102,6 @@ proc interpreter_runtime_error_no_state
     call print_newline
 
     call wait_for_user_end_execution
-    ; FIXME: We shouldn't exit here, but this is our only way now
     call exit_fail
 
     pop dx
@@ -6132,7 +6128,6 @@ proc interpreter_runtime_error
     call show_file_error
 
     call wait_for_user_end_execution
-    ; FIXME: We shouldn't exit here, but this is our only way now
     call exit_fail
 
     pop ax
