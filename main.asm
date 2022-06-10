@@ -61,16 +61,16 @@ DATASEG
     TOKEN_SIZE = 5
 
     ; Keyword definitions
-    keyword_show db TOKEN_TYPE_SHOW, 4, "show"
+    keyword_show db TOKEN_TYPE_SHOW, 4, "Show"
     keyword_if db TOKEN_TYPE_IF, 2, "if"
     keyword_else db TOKEN_TYPE_ELSE, 4, "else"
     keyword_loop db TOKEN_TYPE_LOOP, 4, "loop"
-    keyword_xline db TOKEN_TYPE_XLINE, 5, "xline"
-    keyword_yline db TOKEN_TYPE_YLINE, 5, "yline"
-    keyword_rect db TOKEN_TYPE_RECT, 4, "rect"
-    keyword_filledrect db TOKEN_TYPE_FILLEDRECT, 10, "filledrect"
-    keyword_setcolor db TOKEN_TYPE_SETCOLOR, 8, "setcolor"
-    keyword_diagonalline db TOKEN_TYPE_DIAGONALLINE, 12, "diagonalline"
+    keyword_xline db TOKEN_TYPE_XLINE, 5, "XLine"
+    keyword_yline db TOKEN_TYPE_YLINE, 5, "YLine"
+    keyword_rect db TOKEN_TYPE_RECT, 4, "Rect"
+    keyword_filledrect db TOKEN_TYPE_FILLEDRECT, 10, "FilledRect"
+    keyword_setcolor db TOKEN_TYPE_SETCOLOR, 8, "SetColor"
+    keyword_diagonalline db TOKEN_TYPE_DIAGONALLINE, 12, "DiagonalLine"
     keywords dw offset keyword_show, offset keyword_if, offset keyword_else
              dw offset keyword_loop, offset keyword_xline, offset keyword_yline
              dw offset keyword_rect, offset keyword_filledrect, offset keyword_setcolor
@@ -3222,7 +3222,7 @@ proc parser_parse_instruction_two_args
     ret 4
 endp parser_parse_instruction_two_args
 
-; Parses the `xline` instruction
+; Parses the `XLsine` instruction
 proc parser_parse_xline
     push INSTRUCTION_TYPE_XLINE
     push TOKEN_TYPE_XLINE
@@ -3230,7 +3230,7 @@ proc parser_parse_xline
     ret
 endp parser_parse_xline
 
-; Parses the `yline` instruction
+; Parses the `YLine` instruction
 proc parser_parse_yline
     push INSTRUCTION_TYPE_YLINE
     push TOKEN_TYPE_YLINE
@@ -3238,7 +3238,7 @@ proc parser_parse_yline
     ret
 endp parser_parse_yline
 
-; Parses the `rect` instruction
+; Parses the `Rect` instruction
 proc parser_parse_rect
     push INSTRUCTION_TYPE_RECT
     push TOKEN_TYPE_RECT
@@ -3254,7 +3254,7 @@ proc parser_parse_filledrect
     ret
 endp parser_parse_filledrect
 
-; Parses the `diagonalline` instruction
+; Parses the `DiagonalLine` instruction
 proc parser_parse_diagonalline
     push INSTRUCTION_TYPE_DIAGONALLINE
     push TOKEN_TYPE_DIAGONALLINE
@@ -3270,7 +3270,7 @@ proc parser_parse_show
     ret
 endp parser_parse_show
 
-; Parses the `setcolor` instruction
+; Parses the `SetColor` instruction
 proc parser_parse_setcolor
     push INSTRUCTION_TYPE_SETCOLOR
     push TOKEN_TYPE_SETCOLOR
@@ -5501,7 +5501,7 @@ proc instruction_line_execute
     ret 6
 endp instruction_line_execute
 
-; Exectue the `xline` code instruction
+; Exectue the `XLine` code instruction
 instruction_ptr = bp + 4
 proc instruction_xline_execute
     push bp
@@ -5516,7 +5516,7 @@ proc instruction_xline_execute
     ret 2
 endp instruction_xline_execute
 
-; Exectue the `yline` code instruction
+; Exectue the `YLine` code instruction
 instruction_ptr = bp + 4
 proc instruction_yline_execute
     push bp
@@ -5650,7 +5650,7 @@ proc instruction_position_size_execute
     ret 4
 endp instruction_position_size_execute
 
-; Exectue the `rect` code instruction
+; Exectue the `Rect` code instruction
 instruction_ptr = bp + 4
 proc instruction_rect_execute
     push bp
@@ -5664,7 +5664,7 @@ proc instruction_rect_execute
     ret 2
 endp instruction_rect_execute
 
-; Exectue the `filledrect` code instruction
+; Exectue the `FilledRect` code instruction
 instruction_ptr = bp + 4
 proc instruction_filledrect_execute
     push bp
@@ -5678,7 +5678,7 @@ proc instruction_filledrect_execute
     ret 2
 endp instruction_filledrect_execute
 
-; Exectue the `diagonalline` code instruction
+; Exectue the `DiagonalLine` code instruction
 instruction_ptr = bp + 4
 proc instruction_diagonalline_execute
     push bp
@@ -5692,7 +5692,7 @@ proc instruction_diagonalline_execute
     ret 2
 endp instruction_diagonalline_execute
 
-; Exectue the `show` code instruction
+; Exectue the `Show` code instruction
 instruction_ptr = bp + 4
 proc instruction_show_execute
     push bp
@@ -5720,7 +5720,7 @@ proc instruction_show_execute
 
 @@end_show:
 
-    ; Call the show function
+    ; Call the Show function
     push es
     call ax
 
@@ -5738,7 +5738,7 @@ proc instruction_show_execute
     ret 2
 endp instruction_show_execute
 
-; Exectue the `setcolor` code instruction
+; Exectue the `SetColor` code instruction
 instruction_ptr = bp + 4
 arg_ptr = bp - 2
 proc instruction_setcolor_execute
@@ -6281,7 +6281,7 @@ proc graphics_validate_start_size_vectors
     ret 8
 endp graphics_validate_start_size_vectors
 
-; Validates the arguments for an `xline` instructions
+; Validates the arguments for an `XLine` instructions
 start_x = bp + 4
 start_y = bp + 6
 line_length = bp + 8
@@ -6299,7 +6299,7 @@ proc graphics_validate_xline
     ret 6
 endp graphics_validate_xline
 
-; Validates the arguments for a `yline` instructions
+; Validates the arguments for a `YLine` instruction
 start_x = bp + 4
 start_y = bp + 6
 line_length = bp + 8

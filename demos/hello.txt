@@ -1,1 +1,1 @@
-show "Hello world!"
+Show "Hello world!"

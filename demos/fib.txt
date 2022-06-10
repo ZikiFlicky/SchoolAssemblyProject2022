@@ -3,7 +3,7 @@ a = 1
 b = 1
 n = 11
 loop n {
-    show a
+    Show a
     c = a + b
     a = b
     b = c
