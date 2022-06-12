@@ -272,9 +272,9 @@ DATASEG
                        dw offset object_vector_show
 
     ; Vector related variables
-    vector_print_start db "($"
-    vector_print_middle db ", $"
-    vector_print_end db ")$"
+    vector_print_start db "(", 0
+    vector_print_middle db ", ", 0
+    vector_print_end db ")", 0
 
     ; Object offsets
     OBJECT_OFF_TYPE = 0
@@ -2590,7 +2590,7 @@ proc parser_parse_expr_paren
     ret
 endp parser_parse_expr_paren
 
-; General functions for parsing unary operators like `neg` or `not`
+; General function for parsing unary operators like `neg` or `not`
 start_token_type = bp + 4
 expr_type = bp + 6
 inner_expr_ptr = bp - 2
