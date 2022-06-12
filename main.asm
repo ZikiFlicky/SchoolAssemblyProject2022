@@ -416,28 +416,28 @@ proc is_char_var_start
     mov ax, [character]
 
     cmp al, 'a'
-    jl not_lowercase
+    jl @@not_lowercase
     cmp al, 'z'
-    jg not_lowercase
+    jg @@not_lowercase
 
-    jmp character_is_var_start
+    jmp @@character_is_var_start
 
-not_lowercase:
+@@not_lowercase:
     cmp al, 'A'
-    jl not_uppercase
+    jl @@not_uppercase
     cmp al, 'Z'
-    jg not_uppercase
+    jg @@not_uppercase
 
-    jmp character_is_var_start
+    jmp @@character_is_var_start
 
-not_uppercase:
+@@not_uppercase:
     cmp al, '_'
-    je character_is_var_start
+    je @@character_is_var_start
 
     mov ax, 0
     jmp character_var_start_check_end
 
-character_is_var_start:
+@@character_is_var_start:
     mov ax, 1
 
 character_var_start_check_end:
@@ -455,23 +455,24 @@ proc is_char_var
     push [character]
     call is_char_var_start
     test ax, ax
-    jnz character_is_var_start
+    jnz @@character_valid
 
     ; Load character (only al can possibly have a value different from 0)
     mov ax, [character]
 
     cmp al, '0'
-    jl not_digit
+    jl @@not_digit
     cmp al, '9'
-    jg not_digit
+    jg @@not_digit
 
+@@character_valid:
     mov ax, 1
-    jmp character_var_check_end
+    jmp @@check_end
 
-not_digit:
+@@not_digit:
     mov ax, 0
 
-character_var_check_end:
+@@check_end:
 
     pop bp
     ret 2
@@ -561,7 +562,7 @@ proc print_word
     mov ax, [word_number]
 
     cmp ax, 0
-    jge printed_number_is_positive
+    jge @@printed_number_is_positive
 
     ; Print the negative sign
     mov ah, 0Eh
@@ -573,37 +574,37 @@ proc print_word
     ; Flip because we want to print the positive after the '-'
     neg [word ptr word_number]
 
-printed_number_is_positive:
+@@printed_number_is_positive:
     mov ax, [word_number]
     mov cx, 0
     mov bx, 10
 
-get_word_length:
+@@get_word_length:
     inc cx
 
     xor dx, dx
     div bx
 
     cmp ax, 0
-    jne get_word_length
+    jne @@get_word_length
 
-print_digit:
+@@print_digit:
     ; Divide 10^length times
     mov ax, [word_number]
     mov bx, 10
     ; Divide until you make the result mod 10 equal the digit
     push cx
     dec cx
-divide_number:
+@@divide_number:
     cmp cx, 0
-    je end_divide_number
+    je @@end_divide_number
 
     xor dx, dx
     div bx
 
     dec cx
-    jmp divide_number
-end_divide_number:
+    jmp @@divide_number
+@@end_divide_number:
     pop cx
     ; Make the remainder the digit
     xor dx, dx
@@ -618,7 +619,7 @@ end_divide_number:
     mov bl, [graphics_color]
     int 10h
 
-    loop print_digit
+    loop @@print_digit
 
     pop dx
     pop cx
@@ -640,21 +641,21 @@ proc heap_alloc
     mov bl, 10h
     div bl
     test ah, ah
-    jz exact_fit
+    jz @@exact_fit
     inc al
 
-exact_fit:
+@@exact_fit:
     cbw
     mov bx, ax
     mov ah, 48h
     int 21h
-    jnc allocation_success
+    jnc @@allocation_success
 
     ; If we got here, we had an allocation failure
     push offset error_message_allocation_failure
     call interpreter_runtime_error_no_state
 
-allocation_success:
+@@allocation_success:
 
     pop bx
     pop bp
@@ -694,7 +695,7 @@ proc cstrs_eq
 
     mov [word ptr index], 0
 
-loop_cstrs:
+@@loop_cstrs:
     mov bx, [index]
     ; Get char from first string
     mov ax, [cstr1]
@@ -706,25 +707,25 @@ loop_cstrs:
     mov ch, [es:bx]
 
     cmp cl, ch
-    jne cstrs_not_equal
+    jne @@cstrs_not_equal
 
     ; If the characters are NULs
     cmp cl, 0
-    jne cstrs_reloop
+    jne @@cstrs_reloop
 
     ; If we got here, we matched (characters were all the same and NUL is in the same index)
     mov ax, 1
-    jmp end_loop_cstrs
+    jmp @@end_loop_cstrs
 
-cstrs_reloop:
+@@cstrs_reloop:
 
     inc [word ptr index]
-    jmp loop_cstrs
+    jmp @@loop_cstrs
 
-cstrs_not_equal:
+@@cstrs_not_equal:
     mov ax, 0
 
-end_loop_cstrs:
+@@end_loop_cstrs:
 
     pop es
     pop cx
@@ -1256,17 +1257,17 @@ proc token_to_cstr
     mov es, ax
 
     mov bx, 0
-copy_char_to_cstr:
+@@copy_char_to_cstr:
     cmp bx, [token_length]
-    je end_copy_char_to_cstr
+    je @@end_copy_char_to_cstr
 
     mov al, [file_read_buffer + bx]
     mov [es:bx], al
 
     inc bx
-    jmp copy_char_to_cstr
+    jmp @@copy_char_to_cstr
 
-end_copy_char_to_cstr:
+@@end_copy_char_to_cstr:
 
     mov [byte ptr es:bx], 0 ; NUL-terminate
     mov ax, es
@@ -1306,7 +1307,7 @@ proc token_to_number
 
     mov [word ptr number], 0
     mov cx, 0
-loop_digits:
+@@loop_digits:
     mov ax, [number]
     xor dx, dx
     mov bx, 10
@@ -1336,7 +1337,7 @@ loop_digits:
 
     inc cx
     cmp cx, [token_length]
-    jb loop_digits
+    jb @@loop_digits
 
     mov ax, [number]
 
@@ -1409,46 +1410,46 @@ proc lex_number
     push 1
     call read_bytes
     test ax, ax
-    jz not_number
+    jz @@not_number
 
     mov al, [byte ptr file_read_buffer]
     cmp al, '0'
-    jl not_number
+    jl @@not_number
     cmp al, '9'
-    jg not_number
+    jg @@not_number
 
     mov [byte ptr token_type], TOKEN_TYPE_NUMBER
     mov ax, [backtrack]
     mov [token_start_idx], ax
     mov [word ptr token_length], 0
 
-still_number:
+@@still_number:
     inc [word ptr token_length]
 
     push 1
     call read_bytes
     test ax, ax
-    jz end_number
+    jz @@end_number
 
     mov bl, [byte ptr file_read_buffer]
     cmp bl, '0'
-    jl end_number_go_prev
+    jl @@end_number_go_prev
     cmp bl, '9'
-    jg end_number_go_prev
-    jmp still_number
+    jg @@end_number_go_prev
+    jmp @@still_number
 
-end_number_go_prev:
+@@end_number_go_prev:
     ; If we got here there was a non-number character (but there WAS a character), so we must go back 1 step to "unadvance" the character
     mov bx, [word ptr file_idx] ; because we stepped over a non-digit
     dec bx
     push bx
     call file_set_idx
 
-end_number:
+@@end_number:
     mov ax, 1
     jmp end_number_lex
 
-not_number:
+@@not_number:
     push [backtrack]
     call file_set_idx
     mov ax, 0
@@ -1666,54 +1667,55 @@ proc lex_var
     push 1
     call read_bytes
     test ax, ax
-    jz not_var
+    jz @@not_var
 
     mov al, [file_read_buffer]
     cbw
     push ax
     call is_char_var_start
     test ax, ax
-    jz not_var
+    jz @@not_var
 
     mov [byte ptr token_type], TOKEN_TYPE_VAR
     mov ax, [backtrack]
     mov [token_start_idx], ax
     mov [word ptr token_length], 0
 
-still_var:
+@@still_var:
+    ; Store backtrack
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
     inc [word ptr token_length]
 
+    ; Try to read byte
     push 1
     call read_bytes
     test ax, ax
-    jz end_var
+    jz @@end_var
 
+    ; After we found a byte, check if it's a variable character
     mov al, [file_read_buffer]
     cbw
     push ax
     call is_char_var
     test ax, ax
-    jz end_var_go_prev
-    jmp still_var
+    jnz @@still_var
 
-end_var_go_prev:
-    ; If we got here there was a non-var character (but there WAS a character), so we must go back 1 step to "unadvance" the character
-    mov ax, [word ptr file_idx] ; because we stepped over a non-digit
-    dec ax
-    push ax
+@@end_var:
+    push [backtrack]
     call file_set_idx
 
-end_var:
     mov ax, 1
-    jmp end_var_lex
+    jmp @@end_var_lex
 
-not_var:
+@@not_var:
     push [backtrack]
     call file_set_idx
     mov ax, 0
-    jmp end_var_lex
+    jmp @@end_var_lex
 
-end_var_lex:
+@@end_var_lex:
 
     add sp, 2
     pop bp
@@ -1955,23 +1957,23 @@ proc remove_whitespace
     sub sp, 2
     push ax
 
-keep_removing:
+@@keep_removing:
     mov ax, [file_idx]
     mov [backtrack], ax
     call remove_comment
     test ax, ax
-    jnz keep_removing
+    jnz @@keep_removing
     push 1
     call read_bytes
     test ax, ax
-    jz end_removing
+    jz @@end_removing
     cmp [byte ptr file_read_buffer], ' '
-    je keep_removing
+    je @@keep_removing
     cmp [byte ptr file_read_buffer], 9 ; Tab
-    je keep_removing
+    je @@keep_removing
     push [backtrack]
     call file_set_idx
-end_removing:
+@@end_removing:
 
     pop ax
     add sp, 2
@@ -2296,24 +2298,24 @@ proc parser_match
 
     call lex
     test ax, ax
-    jz not_matched
+    jz @@not_matched
 
     ; Load expected token type into al and parsed type into ah
     mov ax, [expected_type]
     mov ah, [token_type]
     cmp al, ah
-    jne not_matched
+    jne @@not_matched
 
     ; If we got here we do match
     mov ax, 1
-    jmp end_match
+    jmp @@end_match
 
-not_matched:
+@@not_matched:
     push [backtrack]
     call file_set_idx
     mov ax, 0
 
-end_match:
+@@end_match:
 
     add sp, 2
     pop bp
@@ -2385,7 +2387,7 @@ proc parser_parse_expr_number
     push TOKEN_TYPE_NUMBER
     call parser_match
     test ax, ax
-    jz parse_expr_number_finish
+    jz @@parse_finish
 
     call token_to_number ; Moves the actual number into ax
     mov [number], ax
@@ -2400,12 +2402,12 @@ proc parser_parse_expr_number
 
     ; Move the address of the expr to ax so we can return it
     mov ax, es
-    jmp parse_expr_number_finish
+    jmp @@parse_finish
 
-parse_expr_number_failed:
+@@parse_failed:
     mov ax, 0
 
-parse_expr_number_finish:
+@@parse_finish:
 
     pop es
     add sp, 4
@@ -2668,7 +2670,7 @@ proc parser_parse_expr_var
     push TOKEN_TYPE_VAR
     call parser_match
     test ax, ax
-    jz not_found_expr_var
+    jz @@not_found
 
     call token_to_cstr
     mov [var_name], ax
@@ -2682,12 +2684,12 @@ proc parser_parse_expr_var
     mov [es:EXPR_VAR_OFF_NAME], ax
 
     mov ax, es
-    jmp end_parse_expr_var
+    jmp @@end_parse
 
-not_found_expr_var:
+@@not_found:
     mov ax, 0
 
-end_parse_expr_var:
+@@end_parse:
 
     pop es
     add sp, 4
@@ -3351,7 +3353,7 @@ proc parser_parse_block
     push TOKEN_TYPE_LEFT_BRACE
     call parser_match
     test ax, ax
-    jz block_parse_failed
+    jz @@parse_failed
 
     push 0 ; Don't error if we don't match the newline
     call parser_expect_newline
@@ -3362,32 +3364,32 @@ proc parser_parse_block
     mov es, ax
 
     mov bx, 0 ; Offset
-parse_block_instruction:
+@@parse_block:
     push TOKEN_TYPE_RIGHT_BRACE
     call parser_match
     test ax, ax
-    jnz finish_block
+    jnz @@finish_parse
 
     call parser_parse_instruction
     test ax, ax
-    jz block_parse_failed
+    jz @@parse_failed
 
     ; Set the parsed instruction
     mov [es:bx], ax
 
     add bx, 2
-    jmp parse_block_instruction
+    jmp @@parse_block
 
-finish_block:
+@@finish_parse:
     ; Set a NUL at the end
     mov [word ptr es:bx], 0
     mov ax, es
-    jmp block_parse_end
+    jmp @@parse_end
 
-block_parse_failed:
+@@parse_failed:
     mov ax, 0
 
-block_parse_end:
+@@parse_end:
 
     pop es
     pop bx
@@ -4492,14 +4494,14 @@ proc expr_var_eval
     call interpreter_get_variable
 
     test ax, ax
-    jnz found_variable
+    jnz @@found_variable
 
     ; If we got here, we didn't find a variable
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_variable_not_found
     call interpreter_runtime_error
 
-found_variable:
+@@found_variable:
 
     pop es
     pop bp
@@ -5143,123 +5145,123 @@ proc expr_eval
     mov al, [es:EXPR_OFF_TYPE]
 
     cmp al, EXPR_TYPE_NUMBER
-    je choice_eval_number
+    je @@choice_number
     cmp al, EXPR_TYPE_VAR
-    je choice_eval_var
+    je @@choice_var
     cmp al, EXPR_TYPE_ADD
-    je choice_eval_add
+    je @@choice_add
     cmp al, EXPR_TYPE_SUB
-    je choice_eval_sub
+    je @@choice_sub
     cmp al, EXPR_TYPE_MUL
-    je choice_eval_mul
+    je @@choice_mul
     cmp al, EXPR_TYPE_DIV
-    je choice_eval_div
+    je @@choice_div
     cmp al, EXPR_TYPE_MOD
-    je choice_eval_mod
+    je @@choice_mod
     cmp al, EXPR_TYPE_NEG
-    je choice_eval_neg
+    je @@choice_neg
     cmp al, EXPR_TYPE_CMP_EQUALS
-    je choice_eval_cmp_equals
+    je @@choice_cmp_equals
     cmp al, EXPR_TYPE_CMP_NOT_EQUAL
-    je choice_eval_cmp_not_equal
+    je @@choice_cmp_not_equal
     cmp al, EXPR_TYPE_CMP_SMALLER
-    je choice_eval_cmp_smaller
+    je @@choice_cmp_smaller
     cmp al, EXPR_TYPE_CMP_BIGGER
-    je choice_eval_cmp_bigger
+    je @@choice_cmp_bigger
     cmp al, EXPR_TYPE_CMP_SMALLER_EQUALS
-    je choice_eval_cmp_smaller_equals
+    je @@choice_cmp_smaller_equals
     cmp al, EXPR_TYPE_CMP_BIGGER_EQUALS
-    je choice_eval_cmp_bigger_equals
+    je @@choice_cmp_bigger_equals
     cmp al, EXPR_TYPE_AND
-    je choice_eval_and
+    je @@choice_and
     cmp al, EXPR_TYPE_OR
-    je choice_eval_or
+    je @@choice_or
     cmp al, EXPR_TYPE_NOT
-    je choice_eval_not
+    je @@choice_not
     cmp al, EXPR_TYPE_STRING
-    je choice_eval_string
+    je @@choice_string
     cmp al, EXPR_TYPE_VECTOR
-    je choice_eval_vector
+    je @@choice_vector
 
     ; If we got here, our type is invalid
     call panic
 
-choice_eval_number:
+@@choice_number:
     mov ax, offset expr_number_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_var:
+@@choice_var:
     mov ax, offset expr_var_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_add:
+@@choice_add:
     mov ax, offset expr_add_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_sub:
+@@choice_sub:
     mov ax, offset expr_sub_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_mul:
+@@choice_mul:
     mov ax, offset expr_mul_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_div:
+@@choice_div:
     mov ax, offset expr_div_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_mod:
+@@choice_mod:
     mov ax, offset expr_mod_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_neg:
+@@choice_neg:
     mov ax, offset expr_neg_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_cmp_equals:
+@@choice_cmp_equals:
     mov ax, offset expr_cmp_equals_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_cmp_not_equal:
+@@choice_cmp_not_equal:
     mov ax, offset expr_cmp_not_equal_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_cmp_smaller:
+@@choice_cmp_smaller:
     mov ax, offset expr_cmp_smaller_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_cmp_bigger:
+@@choice_cmp_bigger:
     mov ax, offset expr_cmp_bigger_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_cmp_smaller_equals:
+@@choice_cmp_smaller_equals:
     mov ax, offset expr_cmp_smaller_equals_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_cmp_bigger_equals:
+@@choice_cmp_bigger_equals:
     mov ax, offset expr_cmp_bigger_equals_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_and:
+@@choice_and:
     mov ax, offset expr_and_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_or:
+@@choice_or:
     mov ax, offset expr_or_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_not:
+@@choice_not:
     mov ax, offset expr_not_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_string:
+@@choice_string:
     mov ax, offset expr_string_eval
-    jmp end_choice_eval
+    jmp @@end_choice
 
-choice_eval_vector:
+@@choice_vector:
     mov ax, offset expr_vector_eval
 
-end_choice_eval:
+@@end_choice:
 
     push [expr_ptr]
     call ax
