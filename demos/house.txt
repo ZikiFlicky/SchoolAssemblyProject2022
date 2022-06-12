@@ -1,3 +1,7 @@
+# Sky
+SetColor 9
+FilledRect (0, 0), (320 - 1, 200 - 1)
+# House
 SetColor 14 # Light yellow
 FilledRect (50, 50), (60, 40)
 SetColor 6 # Brown
@@ -13,3 +17,9 @@ SetColor 15 # White
 Rect (60, 62), (15, 15) # Border
 YLine (67, 62), 15 # Border
 XLine (60, 69), 15 # Border
+# Ground
+SetColor 6 # Brown
+FilledRect (0, 90), (320 - 1, 110 - 1)
+# Grass
+SetColor 2 # Green
+FilledRect (0, 90), (320 - 1, 4)
