@@ -155,6 +155,7 @@ DATASEG
     INSTRUCTION_TYPE_FILLEDRECT = 8
     INSTRUCTION_TYPE_DIAGONALLINE = 9
     INSTRUCTION_TYPE_SETCOLOR = 10
+    INSTRUCTION_TYPE_BLOCK = 11
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -166,16 +167,19 @@ DATASEG
     INSTRUCTION_ONE_ARG_OFF_ARG = 3
 
     INSTRUCTION_IF_OFF_EXPR = 3
-    INSTRUCTION_IF_OFF_BLOCK = 5
-    INSTRUCTION_IF_OFF_ELSE_BLOCK = 7
+    INSTRUCTION_IF_OFF_INSTRUCTION = 5
+    INSTRUCTION_IF_OFF_ELSE_INSTRUCTION = 7
 
     INSTRUCTION_LOOP_OFF_EXPR = 3
-    INSTRUCTION_LOOP_OFF_BLOCK = 5
+    INSTRUCTION_LOOP_OFF_INSTRUCTION = 5
 
     INSTRUCTION_ONE_ARG_OFF_ARG = 3
 
     INSTRUCTION_TWO_ARGS_OFF_ARG1 = 3
     INSTRUCTION_TWO_ARGS_OFF_ARG2 = 5
+
+    INSTRUCTION_BLOCK_OFF_INSTRUCTIONS = 3
+    INSTRUCTION_BLOCK_OFF_LENGTH = 5
 
     INSTRUCTION_MAX_SIZE = 9
 
@@ -202,6 +206,33 @@ DATASEG
 
     parser_and_operators db TOKEN_TYPE_AMPERSAND_AMPERSAND, EXPR_TYPE_AND
     AMOUNT_PARSER_AND_OPERATORS = 1
+
+    ; Instruction parsing functions and metadata about the instructions produced from them
+    ; The word is parse function offset
+    ; The byte is a boolean telling us if we should have a newline after the instruction
+    instruction_defs dw offset parser_parse_assignment
+                     db 1
+                     dw offset parser_parse_if
+                     db 0
+                     dw offset parser_parse_loop
+                     db 0
+                     dw offset parser_parse_xline
+                     db 1
+                     dw offset parser_parse_yline
+                     db 1
+                     dw offset parser_parse_rect
+                     db 1
+                     dw offset parser_parse_filledrect
+                     db 1
+                     dw offset parser_parse_diagonalline
+                     db 1
+                     dw offset parser_parse_show
+                     db 1
+                     dw offset parser_parse_setcolor
+                     db 1
+                     dw offset parser_parse_block
+                     db 0
+    AMOUNT_INSTRUCTION_DEFS = 11
 
     ; Stores parsed instructions
     MAX_AMOUNT_INSTRUCTIONS = 80h
@@ -2173,6 +2204,163 @@ proc instruction_new
     ret 2
 endp instruction_new
 
+; Delete an assign instruction
+instruction_ptr = bp + 4
+proc instruction_assign_delete
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    push [es:INSTRUCTION_ASSIGN_OFF_KEY]
+    call heap_free
+    push [es:INSTRUCTION_ASSIGN_OFF_EXPR]
+    call expr_delete
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp instruction_assign_delete
+
+; Delete an `if` instruction
+instruction_ptr = bp + 4
+proc instruction_if_delete
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    push [es:INSTRUCTION_IF_OFF_EXPR]
+    call expr_delete
+    push [es:INSTRUCTION_IF_OFF_INSTRUCTION]
+    call instruction_delete
+    cmp [word ptr es:INSTRUCTION_IF_OFF_ELSE_INSTRUCTION], 0
+    je @@no_else_block
+    ; If we got here we have an else block
+    push [es:INSTRUCTION_IF_OFF_ELSE_INSTRUCTION]
+    call instruction_delete
+
+@@no_else_block:
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp instruction_if_delete
+
+; Delete a `loop` instruction
+instruction_ptr = bp + 4
+proc instruction_loop_delete
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    push [es:INSTRUCTION_LOOP_OFF_EXPR]
+    call expr_delete
+    push [es:INSTRUCTION_LOOP_OFF_INSTRUCTION]
+    call instruction_delete
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp instruction_loop_delete
+
+; Delete a two arg instructions
+instruction_ptr = bp + 4
+proc instruction_two_args_delete
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG1]
+    call expr_delete
+    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG2]
+    call expr_delete
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp instruction_two_args_delete
+
+; Delete a one arg instructions
+instruction_ptr = bp + 4
+proc instruction_one_arg_delete
+    push bp
+    mov bp, sp
+    push ax
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    push [es:INSTRUCTION_ONE_ARG_OFF_ARG]
+    call expr_delete
+
+    pop es
+    pop ax
+    pop bp
+    ret 2
+endp instruction_one_arg_delete
+
+; Delete a block instruction
+instruction_ptr = bp + 4
+proc instruction_block_delete
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+    mov ax, [es:INSTRUCTION_BLOCK_OFF_INSTRUCTIONS]
+    mov es, ax
+    mov cx, [es:INSTRUCTION_BLOCK_OFF_LENGTH]
+    mov ax, [es:INSTRUCTION_BLOCK_OFF_INSTRUCTIONS]
+    mov es, ax
+
+    mov bx, 0
+@@remove_instruction:
+    cmp cx, 0
+    je @@end_remove_block
+
+    push [es:bx]
+    call instruction_delete
+
+    dec cx
+    add bx, 2
+    jmp @@remove_instruction
+
+@@end_remove_block:
+    push es
+    call heap_free
+
+    pop es
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 2
+endp instruction_block_delete
+
 ; Deletes an instruction
 instruction_ptr = bp + 4
 proc instruction_delete
@@ -2207,50 +2395,42 @@ proc instruction_delete
     je @@choice_one_arg
     cmp al, INSTRUCTION_TYPE_SETCOLOR
     je @@choice_one_arg
+    cmp al, INSTRUCTION_TYPE_BLOCK
+    je @@choice_block
 
     ; If we got here we might not need to delete it
-    jmp @@choice_end
+    jmp @@no_delete_func
 
 @@choice_assign:
-    push [es:INSTRUCTION_ASSIGN_OFF_KEY]
-    call heap_free
-    push [es:INSTRUCTION_ASSIGN_OFF_EXPR]
-    call expr_delete
+    mov ax, offset instruction_assign_delete
     jmp @@choice_end
 
 @@choice_if:
-    push [es:INSTRUCTION_IF_OFF_EXPR]
-    call expr_delete
-    push [es:INSTRUCTION_IF_OFF_BLOCK]
-    call block_delete
-    cmp [word ptr es:INSTRUCTION_IF_OFF_ELSE_BLOCK], 0
-    je @@no_else_block
-    ; If we got here we have an else block
-    push [es:INSTRUCTION_IF_OFF_ELSE_BLOCK]
-    call block_delete
-
-@@no_else_block:
+    mov ax, offset instruction_if_delete
     jmp @@choice_end
 
 @@choice_loop:
-    push [es:INSTRUCTION_LOOP_OFF_EXPR]
-    call expr_delete
-    push [es:INSTRUCTION_LOOP_OFF_BLOCK]
-    call block_delete
+    mov ax, offset instruction_loop_delete
     jmp @@choice_end
 
 @@choice_two_args:
-    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG1]
-    call expr_delete
-    push [es:INSTRUCTION_TWO_ARGS_OFF_ARG2]
-    call expr_delete
+    mov ax, offset instruction_two_args_delete
     jmp @@choice_end
 
 @@choice_one_arg:
-    push [es:INSTRUCTION_ONE_ARG_OFF_ARG]
-    call expr_delete
+    mov ax, offset instruction_one_arg_delete
+    jmp @@choice_end
+
+@@choice_block:
+    mov ax, offset instruction_block_delete
 
 @@choice_end:
+
+    ; Call the delete function
+    push es
+    call ax
+
+@@no_delete_func:
 
     ; Free the address of the whole instruction
     push es
@@ -2952,8 +3132,8 @@ endp parser_parse_assignment
 
 ; Parse the `if` instruction
 expr_ptr = bp - 2
-block_ptr = bp - 4
-else_block_ptr = bp - 6
+instruction_ptr = bp - 4
+else_instruction_ptr = bp - 6
 proc parser_parse_if
     push bp
     mov bp, sp
@@ -2970,15 +3150,21 @@ proc parser_parse_if
 
 @@start_parse:
 
+    ; Try to parse the expression after the `if` token
     call parser_parse_expr
     test ax, ax
     jz @@if_error_no_value
     mov [expr_ptr], ax
 
-    call parser_parse_block
+    ; Advance a newline if there is one
+    push 0
+    call parser_expect_newline
+
+    ; Try to parse the instruction following
+    call parser_parse_instruction
     test ax, ax
-    jz @@if_error_no_block
-    mov [block_ptr], ax
+    jz @@if_error_no_instruction
+    mov [instruction_ptr], ax
 
     ; See if we have an else
     push TOKEN_TYPE_ELSE
@@ -2986,15 +3172,19 @@ proc parser_parse_if
     test ax, ax
     jz @@not_found_else
 
-    call parser_parse_block
+    ; Advance a newline if there is one
+    push 0
+    call parser_expect_newline
+
+    call parser_parse_instruction
     test ax, ax
-    jz @@not_found_else_block
-    mov [else_block_ptr], ax
+    jz @@not_found_else_instruction
+    mov [else_instruction_ptr], ax
 
     jmp @@create_if_instruction
 
 @@not_found_else:
-    mov [word ptr else_block_ptr], 0
+    mov [word ptr else_instruction_ptr], 0
 
 @@create_if_instruction:
 
@@ -3005,11 +3195,11 @@ proc parser_parse_if
     mov ax, [expr_ptr]
     mov [es:INSTRUCTION_IF_OFF_EXPR], ax
 
-    mov ax, [block_ptr]
-    mov [es:INSTRUCTION_IF_OFF_BLOCK], ax
+    mov ax, [instruction_ptr]
+    mov [es:INSTRUCTION_IF_OFF_INSTRUCTION], ax
 
-    mov ax, [else_block_ptr]
-    mov [es:INSTRUCTION_IF_OFF_ELSE_BLOCK], ax
+    mov ax, [else_instruction_ptr]
+    mov [es:INSTRUCTION_IF_OFF_ELSE_INSTRUCTION], ax
 
     mov ax, es
     jmp @@end_parse
@@ -3020,8 +3210,8 @@ proc parser_parse_if
     call parser_error
     jmp @@end_parse
 
-@@not_found_else_block:
-@@if_error_no_block:
+@@not_found_else_instruction:
+@@if_error_no_instruction:
     push [file_idx]
     push offset error_message_syntax_error
     call parser_error
@@ -3040,7 +3230,7 @@ endp parser_parse_if
 
 ; Parse the `loop` instruction
 expr_ptr = bp - 2
-block_ptr = bp - 4
+instruction_ptr = bp - 4
 proc parser_parse_loop
     push bp
     mov bp, sp
@@ -3062,10 +3252,14 @@ proc parser_parse_loop
     jz @@loop_error_no_value
     mov [expr_ptr], ax
 
-    call parser_parse_block
+    ; Advance a newline if there is one
+    push 0
+    call parser_expect_newline
+
+    call parser_parse_instruction
     test ax, ax
-    jz @@loop_error_no_block
-    mov [block_ptr], ax
+    jz @@loop_error_no_instruction
+    mov [instruction_ptr], ax
 
     push INSTRUCTION_TYPE_LOOP
     call instruction_new
@@ -3074,8 +3268,8 @@ proc parser_parse_loop
     mov ax, [expr_ptr]
     mov [es:INSTRUCTION_LOOP_OFF_EXPR], ax
 
-    mov ax, [block_ptr]
-    mov [es:INSTRUCTION_LOOP_OFF_BLOCK], ax
+    mov ax, [instruction_ptr]
+    mov [es:INSTRUCTION_LOOP_OFF_INSTRUCTION], ax
 
     mov ax, es
     jmp @@end_parse
@@ -3086,7 +3280,7 @@ proc parser_parse_loop
     call parser_error
     jmp @@end_parse
 
-@@loop_error_no_block:
+@@loop_error_no_instruction:
     push [file_idx]
     push offset error_message_syntax_error
     call parser_error
@@ -3273,80 +3467,13 @@ proc parser_parse_setcolor
     ret
 endp parser_parse_setcolor
 
-; Returns a parsed instruction segment into ax, or 0 if no instruction found
-instruction_ptr = bp - 2
-backtrack = bp - 4
-proc parser_parse_instruction
-    push bp
-    mov bp, sp
-    sub sp, 4
-    push es
-
-    ; Store backtrack for the instruction's inner start position
-    mov ax, [file_idx]
-    mov [backtrack], ax
-
-    call parser_parse_assignment
-    test ax, ax
-    jnz @@parsed_instruction
-    call parser_parse_if
-    test ax, ax
-    jnz @@parsed_instruction
-    call parser_parse_loop
-    test ax, ax
-    jnz @@parsed_instruction
-    call parser_parse_xline
-    test ax, ax
-    jnz @@parsed_instruction
-    call parser_parse_yline
-    test ax, ax
-    jnz @@parsed_instruction
-    call parser_parse_rect
-    test ax, ax
-    jnz @@parsed_instruction
-    call parser_parse_filledrect
-    test ax, ax
-    jnz @@parsed_instruction
-    call parser_parse_diagonalline
-    test ax, ax
-    jnz @@parsed_instruction
-    call parser_parse_show
-    test ax, ax
-    jnz @@parsed_instruction
-    call parser_parse_setcolor
-    test ax, ax
-    jnz @@parsed_instruction
-
-    ; If wasn't able to parse an instruction, return a NULL
-    mov [word ptr instruction_ptr], 0
-    jmp @@end_parse
-
-@@parsed_instruction:
-    mov [word ptr instruction_ptr], ax ; Save the instruction in the stack
-    push 1
-    call parser_expect_newline
-
-    ; Get instruction into es
-    mov ax, [instruction_ptr]
-    mov es, ax
-    ; Put backtrack into instruction
-    mov ax, [backtrack]
-    mov [es:INSTRUCTION_OFF_FILE_INDEX], ax
-    ; Return the instruction
-    mov ax, es
-
-@@end_parse:
-
-    pop es
-    add sp, 4
-    pop bp
-    ret
-endp parser_parse_instruction
-
 ; Try to parse a block of code: {instructions seperated by newline}
+block_ptr = bp - 2
+block_length = bp - 4
 proc parser_parse_block
     push bp
     mov bp, sp
+    sub sp, 4
     push bx
     push es
 
@@ -3359,10 +3486,11 @@ proc parser_parse_block
     call parser_expect_newline
 
     ; FIXME: Be able to extend the list
-    push 2 * (7 + 1)
+    push 2 * 8
     call heap_alloc
     mov es, ax
 
+    mov [word ptr block_length], 0
     mov bx, 0 ; Offset
 @@parse_block:
     push TOKEN_TYPE_RIGHT_BRACE
@@ -3378,11 +3506,26 @@ proc parser_parse_block
     mov [es:bx], ax
 
     add bx, 2
+    inc [word ptr block_length]
     jmp @@parse_block
 
 @@finish_parse:
-    ; Set a NUL at the end
-    mov [word ptr es:bx], 0
+    mov ax, es
+    ; Store block
+    mov [block_ptr], ax
+
+    ; Create new block instruction
+    push INSTRUCTION_TYPE_BLOCK
+    call instruction_new
+    mov es, ax
+    ; Store length
+    mov ax, [block_length]
+    mov [es:INSTRUCTION_BLOCK_OFF_LENGTH], ax
+    ; Store actual instructions
+    mov ax, [block_ptr]
+    mov [es:INSTRUCTION_BLOCK_OFF_INSTRUCTIONS], ax
+
+    ; To return the instruction
     mov ax, es
     jmp @@parse_end
 
@@ -3393,9 +3536,82 @@ proc parser_parse_block
 
     pop es
     pop bx
+    add sp, 4
     pop bp
     ret
 endp parser_parse_block
+
+; Returns a parsed instruction segment into ax, or 0 if no instruction found
+instruction_ptr = bp - 2
+backtrack = bp - 4
+proc parser_parse_instruction
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push bx
+    push cx
+    push es
+
+    ; Store backtrack for the instruction's inner start position
+    mov ax, [file_idx]
+    mov [backtrack], ax
+
+    lea bx, [instruction_defs]
+    mov cx, AMOUNT_INSTRUCTION_DEFS
+@@loop_instruction_defs:
+    cmp cx, 0
+    je @@end_loop_instruction_defs
+
+    mov ax, [bx + 0]
+    call ax
+    test ax, ax
+    jnz @@parsed_instruction
+
+    dec cx
+    add bx, 3
+    jmp @@loop_instruction_defs
+
+@@end_loop_instruction_defs:
+
+    ; If wasn't able to parse an instruction, return a NULL
+    mov [word ptr instruction_ptr], 0
+    jmp @@end_parse
+
+@@parsed_instruction:
+    mov [word ptr instruction_ptr], ax ; Save the instruction in the stack
+
+    ; Decide on parameters ofr `parser_expect_newline`
+    cmp [byte ptr bx + 2], 0
+    jne @@must_have_newline
+
+    mov ax, 0
+    jmp @@end_check_for_newline
+
+@@must_have_newline:
+    mov ax, 1
+
+@@end_check_for_newline:
+    push ax
+    call parser_expect_newline
+
+    ; Get instruction into es
+    mov ax, [instruction_ptr]
+    mov es, ax
+    ; Put backtrack into instruction
+    mov ax, [backtrack]
+    mov [es:INSTRUCTION_OFF_FILE_INDEX], ax
+    ; Return the instruction
+    mov ax, es
+
+@@end_parse:
+
+    pop es
+    pop cx
+    pop bx
+    add sp, 4
+    pop bp
+    ret
+endp parser_parse_instruction
 
 ; Parse all of the file
 backtrack = bp - 2
@@ -5326,17 +5542,17 @@ proc instruction_if_execute
 
     ; If we got here, the expression was truthy so we need to execute the block
 
-    push [es:INSTRUCTION_IF_OFF_BLOCK]
-    call block_execute
+    push [es:INSTRUCTION_IF_OFF_INSTRUCTION]
+    call instruction_execute
     jmp @@end_execute
 
 @@if_expr_failed:
-    cmp [word ptr es:INSTRUCTION_IF_OFF_ELSE_BLOCK], 0
+    cmp [word ptr es:INSTRUCTION_IF_OFF_ELSE_INSTRUCTION], 0
     je @@end_execute
 
     ; If we got here, we have an else block we need to execute
-    push [es:INSTRUCTION_IF_OFF_ELSE_BLOCK]
-    call block_execute
+    push [es:INSTRUCTION_IF_OFF_ELSE_INSTRUCTION]
+    call instruction_execute
 
 @@end_execute:
 
@@ -5377,8 +5593,8 @@ proc instruction_loop_execute
     jz @@loop_condition_failed
 
     ; If we got here, the expression was truthy so we need to execute the block
-    push [es:INSTRUCTION_LOOP_OFF_BLOCK]
-    call block_execute
+    push [es:INSTRUCTION_LOOP_OFF_INSTRUCTION]
+    call instruction_execute
 
     jmp @@try_loop
 
@@ -5801,6 +6017,45 @@ proc instruction_setcolor_execute
     ret 2
 endp instruction_setcolor_execute
 
+; Execute a block segment given as a parameter
+instruction_ptr = bp + 4
+proc instruction_block_execute
+    push bp
+    mov bp, sp
+    push ax
+    push bx
+    push cx
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+    mov cx, [es:INSTRUCTION_BLOCK_OFF_LENGTH]
+    mov ax, [es:INSTRUCTION_BLOCK_OFF_INSTRUCTIONS]
+    mov es, ax
+
+    mov bx, 0
+@@loop_block:
+    cmp cx, 0
+    je @@end_loop_block
+
+    ; Execute the current instruction
+    push [es:bx]
+    call instruction_execute
+
+    dec cx
+    add bx, 2
+    jmp @@loop_block
+
+@@end_loop_block:
+
+    pop es
+    pop cx
+    pop bx
+    pop ax
+    pop bp
+    ret 2
+endp instruction_block_execute
+
 ; Exectue an instruction segment given as a parameter
 instruction_ptr = bp + 4
 proc instruction_execute
@@ -5834,6 +6089,8 @@ proc instruction_execute
     je @@choice_show
     cmp al, INSTRUCTION_TYPE_SETCOLOR
     je @@choice_setcolor
+    cmp al, INSTRUCTION_TYPE_BLOCK
+    je @@choice_block
 
     ; If we matched nothing
     call panic
@@ -5878,6 +6135,10 @@ proc instruction_execute
 
 @@choice_setcolor:
     mov ax, offset instruction_setcolor_execute
+    jmp @@end_choice
+
+@@choice_block:
+    mov ax, offset instruction_block_execute
 
 @@end_choice:
 
@@ -5890,75 +6151,6 @@ proc instruction_execute
     pop bp
     ret 2
 endp instruction_execute
-
-; Delete a block segment given as a parameter
-block_ptr = bp + 4
-proc block_delete
-    push bp
-    mov bp, sp
-    push ax
-    push bx
-    push es
-
-    mov ax, [block_ptr]
-    mov es, ax
-
-    ; Loop until reached NULL
-    mov bx, 0
-@@remove_instruction:
-    mov ax, [es:bx]
-    test ax, ax
-    jz @@end_remove_block
-
-    push ax
-    call instruction_delete
-
-    add bx, 2
-    jmp @@remove_instruction
-
-@@end_remove_block:
-    push es
-    call heap_free
-
-    pop es
-    pop bx
-    pop ax
-    pop bp
-    ret 2
-endp block_delete
-
-; Execute a block segment given as a parameter
-block_ptr = bp + 4
-proc block_execute
-    push bp
-    mov bp, sp
-    push ax
-    push bx
-    push es
-
-    mov ax, [block_ptr]
-    mov es, ax
-
-    mov bx, 0
-@@loop_block:
-    mov ax, [es:bx]
-    test ax, ax
-    jz @@end_loop_block
-
-    push ax
-    call instruction_execute
-
-    add bx, 2
-    jmp @@loop_block
-
-@@end_loop_block:
-
-    pop es
-    pop bx
-    pop ax
-    pop bp
-    ret 2
-endp block_execute
 
 ; Execute all of the interpreter's instructions
 proc interpreter_execute
