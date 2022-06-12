@@ -204,10 +204,9 @@ DATASEG
     AMOUNT_PARSER_AND_OPERATORS = 1
 
     ; Stores parsed instructions
-    ; FIXME: This can overflow + only allows a certain amount of instructions
-    parsed_instructions dw 10h dup(?)
+    MAX_AMOUNT_INSTRUCTIONS = 80h
+    parsed_instructions dw MAX_AMOUNT_INSTRUCTIONS dup(?)
     amount_instructions dw 0
-
 
     ; Object type offsets
     OBJECT_TYPE_OFF_FN_DELETE = 0
@@ -321,7 +320,7 @@ DATASEG
     parser_error_unexpected_newline db "Unxpected newline", 0
     parser_error_unexpected_token db "Unxpected token", 0
     parser_error_number_too_big db "Number too big", 0
-
+    parser_error_too_many_instructions db "Too many instructions", 0
 
     ; Interpreter error related stuff
     runtime_error_no_state_start db "RuntimeError: ", 0
@@ -3412,7 +3411,10 @@ proc parser_parse
     push 0
     call parser_expect_newline
 
-try_parse_instruction:
+@@try_parse_instruction:
+    cmp [word ptr amount_instructions], MAX_AMOUNT_INSTRUCTIONS
+    je @@error_too_many_instructions
+
     ; Store in bx where to write to in the data segment
     mov bx, [word ptr amount_instructions]
     shl bx, 1 ; Multiply by 2 to align as word-sized ptr
@@ -3421,22 +3423,27 @@ try_parse_instruction:
     ; Break from loop if we couldn't parse
     call parser_parse_instruction ; Returns pointer into ax
     test ax, ax
-    jz instruction_parsing_failed
+    jz @@parse_failed
 
     ; Add to array and reloop
     mov [bx], ax ; Put instruction pointer into the address in bx
     inc [word ptr amount_instructions]
-    jmp try_parse_instruction
+    jmp @@try_parse_instruction
+
+@@error_too_many_instructions:
+    push [file_idx]
+    push offset parser_error_too_many_instructions
+    call parser_error
 
     ; End of parsing
-instruction_parsing_failed:
+@@parse_failed:
     ; Check here if you have a remainder of non-parsable code
     mov ax, [file_idx]
     mov [backtrack], ax
 
     call lex
     test ax, ax
-    jz no_code_remainer
+    jz @@no_code_remainer
 
     ; If we got here, we have some remainder code that cannot be parsed, so we should error
 
@@ -3449,7 +3456,7 @@ instruction_parsing_failed:
     push offset parser_error_syntax_error
     call parser_error
 
-no_code_remainer:
+@@no_code_remainer:
 
     pop bx
     pop ax
