@@ -52,6 +52,7 @@ DATASEG
     TOKEN_TYPE_FILLEDRECT = 32
     TOKEN_TYPE_DIAGONALLINE = 33
     TOKEN_TYPE_SETCOLOR = 34
+    TOKEN_TYPE_SETWRITEPOS = 35
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -71,11 +72,12 @@ DATASEG
     keyword_filledrect db TOKEN_TYPE_FILLEDRECT, 10, "FilledRect"
     keyword_setcolor db TOKEN_TYPE_SETCOLOR, 8, "SetColor"
     keyword_diagonalline db TOKEN_TYPE_DIAGONALLINE, 12, "DiagonalLine"
+    keyword_setwritepos db TOKEN_TYPE_SETWRITEPOS, 11, "SetWritePos"
     keywords dw offset keyword_show, offset keyword_if, offset keyword_else
              dw offset keyword_loop, offset keyword_xline, offset keyword_yline
              dw offset keyword_rect, offset keyword_filledrect, offset keyword_setcolor
-             dw offset keyword_diagonalline
-    AMOUNT_KEYWORDS = 10
+             dw offset keyword_diagonalline, offset keyword_setwritepos
+    AMOUNT_KEYWORDS = 11
 
     single_byte_tokens db TOKEN_TYPE_EQU, '='
                        db TOKEN_TYPE_PLUS, '+'
@@ -156,6 +158,7 @@ DATASEG
     INSTRUCTION_TYPE_DIAGONALLINE = 9
     INSTRUCTION_TYPE_SETCOLOR = 10
     INSTRUCTION_TYPE_BLOCK = 11
+    INSTRUCTION_TYPE_SETWRITEPOS = 12
 
     ; Instruction offsets
     INSTRUCTION_OFF_TYPE = 0
@@ -230,9 +233,11 @@ DATASEG
                      db 1
                      dw offset parser_parse_setcolor
                      db 1
+                     dw offset parser_parse_setwritepos
+                     db 1
                      dw offset parser_parse_block
                      db 0
-    AMOUNT_INSTRUCTION_DEFS = 11
+    AMOUNT_INSTRUCTION_DEFS = 12
 
     ; Stores parsed instructions
     MAX_AMOUNT_INSTRUCTIONS = 80h
@@ -272,7 +277,7 @@ DATASEG
                        dw offset object_number_show
 
     object_string_type dw 0
-                       dw 0 ; TODO: Add this
+                       dw 0
                        dw 0
                        dw 0
                        dw 0
@@ -329,6 +334,9 @@ DATASEG
 
     GRAPHICS_SCREEN_WIDTH = 320
     GRAPHICS_SCREEN_HEIGHT = 200
+
+    GRAPHICS_SCREEN_LINE_WIDTH = 40
+    GRAPHICS_SCREEN_AMOUNT_LINES = 24
 
     ; Error related stuff
     file_error_line_message db " [line ", 0
@@ -2397,6 +2405,8 @@ proc instruction_delete
     je @@choice_one_arg
     cmp al, INSTRUCTION_TYPE_BLOCK
     je @@choice_block
+    cmp al, INSTRUCTION_TYPE_SETWRITEPOS
+    je @@choice_one_arg
 
     ; If we got here we might not need to delete it
     jmp @@no_delete_func
@@ -3466,6 +3476,14 @@ proc parser_parse_setcolor
     call parser_parse_instruction_one_arg
     ret
 endp parser_parse_setcolor
+
+; Parses the `SetWritePos` instruction
+proc parser_parse_setwritepos
+    push INSTRUCTION_TYPE_SETWRITEPOS
+    push TOKEN_TYPE_SETWRITEPOS
+    call parser_parse_instruction_one_arg
+    ret
+endp parser_parse_setwritepos
 
 ; Try to parse a block of code: {instructions seperated by newline}
 block_ptr = bp - 2
@@ -6056,6 +6074,85 @@ proc instruction_block_execute
     ret 2
 endp instruction_block_execute
 
+instruction_ptr = bp + 4
+write_x = bp - 2
+write_y = bp - 4
+proc instruction_setwritepos_execute
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push ax
+    push bx
+    push dx
+    push es
+
+    mov ax, [instruction_ptr]
+    mov es, ax
+
+    push [es:INSTRUCTION_ONE_ARG_OFF_ARG]
+    call expr_eval
+    mov [arg_ptr], ax
+    mov es, ax ; Store the argument object segment
+    ; Verify the object is a vector
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_vector_type
+    jne @@error_arg_not_vector
+    ; Get the actual coordinates from the vector object
+    push es
+    call object_vector_get_x
+    mov [write_x], ax
+    push es
+    call object_vector_get_y
+    mov [write_y], ax
+
+    ; Check if number in range of screen width
+    push [write_x]
+    call graphics_validate_text_x
+    jz @@error_invalid_argument
+    ; Check if number in range of screen height
+    push [write_y]
+    call graphics_validate_text_y
+    jz @@error_invalid_argument
+
+    ; Save x and y in dl and dh respectively
+    mov ax, [write_y]
+    mov dh, al
+    mov ax, [write_x]
+    mov dl, al
+    ; Ready up for interrupt
+    mov ah, 2
+    mov bh, 0
+    int 10h
+    jmp @@end_execute
+
+@@error_arg_not_vector:
+    mov ax, [instruction_ptr]
+    mov es, ax
+    mov ax, [es:INSTRUCTION_ONE_ARG_OFF_ARG]
+    mov es, ax
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset error_message_expected_number
+    call interpreter_runtime_error
+
+@@error_invalid_argument:
+    mov ax, [instruction_ptr]
+    mov es, ax
+    push [es:INSTRUCTION_OFF_FILE_INDEX]
+    push offset error_message_invalid_argument_values
+    call interpreter_runtime_error
+
+@@end_execute:
+    push [arg_ptr]
+    call object_deref
+
+    pop es
+    pop dx
+    pop bx
+    pop ax
+    add sp, 4
+    pop bp
+    ret 2
+endp instruction_setwritepos_execute
+
 ; Exectue an instruction segment given as a parameter
 instruction_ptr = bp + 4
 proc instruction_execute
@@ -6091,6 +6188,8 @@ proc instruction_execute
     je @@choice_setcolor
     cmp al, INSTRUCTION_TYPE_BLOCK
     je @@choice_block
+    cmp al, INSTRUCTION_TYPE_SETWRITEPOS
+    je @@choice_setwritepos
 
     ; If we matched nothing
     call panic
@@ -6139,6 +6238,10 @@ proc instruction_execute
 
 @@choice_block:
     mov ax, offset instruction_block_execute
+    jmp @@end_choice
+
+@@choice_setwritepos:
+    mov ax, offset instruction_setwritepos_execute
 
 @@end_choice:
 
@@ -6392,7 +6495,7 @@ endp graphics_convert_position_to_index
 
 ; Sets ax to 1 if x is inside the screen (0<x<width) otherwise sets it to 0
 x = bp + 4
-proc graphics_x_possible
+proc graphics_validate_x
     push bp
     mov bp, sp
 
@@ -6411,11 +6514,11 @@ proc graphics_x_possible
 
     pop bp
     ret 2
-endp graphics_x_possible
+endp graphics_validate_x
 
 ; Sets ax to 1 if y is inside the screen (0<y<height) otherwise sets it to 0
 y = bp + 4
-proc graphics_y_possible
+proc graphics_validate_y
     push bp
     mov bp, sp
 
@@ -6434,7 +6537,7 @@ proc graphics_y_possible
 
     pop bp
     ret 2
-endp graphics_y_possible
+endp graphics_validate_y
 
 ; Returns into ax whether a start-size vector pair is possibly inside of the screen
 start_x = bp + 4
@@ -6447,25 +6550,25 @@ proc graphics_validate_start_size_vectors
 
     ; Check if start x and end x are inside the screen
     push [start_x]
-    call graphics_x_possible
+    call graphics_validate_x
     test ax, ax
     jz @@invalid_vectors
     mov ax, [start_x]
     add ax, [size_width]
     push ax
-    call graphics_x_possible
+    call graphics_validate_x
     test ax, ax
     jz @@invalid_vectors
 
     ; Check if start y and end y are inside the screen
     push [start_y]
-    call graphics_y_possible
+    call graphics_validate_y
     test ax, ax
     jz @@invalid_vectors
     mov ax, [start_y]
     add ax, [size_height]
     push ax
-    call graphics_y_possible
+    call graphics_validate_y
     test ax, ax
     jz @@invalid_vectors
 
@@ -6517,6 +6620,52 @@ proc graphics_validate_yline
     pop bp
     ret 6
 endp graphics_validate_yline
+
+; Sets ax to 1 if the argument is a valid x as a text mode index (0<x<line width) otherwise sets it to 0
+text_x = bp + 4
+proc graphics_validate_text_x
+    push bp
+    mov bp, sp
+
+    cmp [word ptr text_x], 0
+    jl @@not_possible
+    cmp [word ptr text_x], GRAPHICS_SCREEN_LINE_WIDTH
+    jge @@not_possible
+
+    mov ax, 1
+    jmp @@end_check
+
+@@not_possible:
+    mov ax, 0
+
+@@end_check:
+
+    pop bp
+    ret 2
+endp graphics_validate_text_x
+
+; Sets ax to 1 if the argument is a valid y as a text mode index (0<y<amount lines) otherwise sets it to 0
+text_y = bp + 4
+proc graphics_validate_text_y
+    push bp
+    mov bp, sp
+
+    cmp [word ptr text_y], 0
+    jl @@not_possible
+    cmp [word ptr text_y], GRAPHICS_SCREEN_AMOUNT_LINES
+    jge @@not_possible
+
+    mov ax, 1
+    jmp @@end_check
+
+@@not_possible:
+    mov ax, 0
+
+@@end_check:
+
+    pop bp
+    ret 2
+endp graphics_validate_text_y
 
 ; Show horizontal line
 start_x = bp + 4
