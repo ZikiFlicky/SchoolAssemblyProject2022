@@ -2589,12 +2589,12 @@ proc parser_parse_expr_paren
     ret
 endp parser_parse_expr_paren
 
-; General function for parsing unary operators like `neg` or `not`
+; General function for parsing prefix operators like `neg` or `not`
 start_token_type = bp + 4
 expr_type = bp + 6
 inner_expr_ptr = bp - 2
 backtrack = bp - 4
-proc parser_parse_expr_unary
+proc parser_parse_expr_prefix
     push bp
     mov bp, sp
     sub sp, 4
@@ -2638,13 +2638,13 @@ proc parser_parse_expr_unary
     add sp, 4
     pop bp
     ret 4
-endp parser_parse_expr_unary
+endp parser_parse_expr_prefix
 
 ; Parse the `-value` operator
 proc parser_parse_expr_neg
     push EXPR_TYPE_NEG
     push TOKEN_TYPE_MINUS
-    call parser_parse_expr_unary
+    call parser_parse_expr_prefix
     ret
 endp parser_parse_expr_neg
 
@@ -2652,7 +2652,7 @@ endp parser_parse_expr_neg
 proc parser_parse_expr_not
     push EXPR_TYPE_NOT
     push TOKEN_TYPE_EXCLAMATION_MARK
-    call parser_parse_expr_unary
+    call parser_parse_expr_prefix
     ret
 endp parser_parse_expr_not
 
