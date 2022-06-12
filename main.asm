@@ -305,37 +305,35 @@ DATASEG
     file_error_end db "]: ", 0
     file_error_code_line_start db "> ", 0
 
-
     ; Lexer error related stuff
     lexer_error_start db "LexerError", 0
-    lexer_error_invalid_token db "Invalid token", 0
-
-
     ; Parser error related stuff
     parser_error_start db "ParserError", 0
-    parser_error_invalid_token db "Invalid token", 0
-    parser_error_syntax_error db "Syntax error", 0
-    parser_error_expected_newline db "Expected newline", 0
-    parser_error_unexpected_newline db "Unxpected newline", 0
-    parser_error_unexpected_token db "Unxpected token", 0
-    parser_error_number_too_big db "Number too big", 0
-    parser_error_too_many_instructions db "Too many instructions", 0
-
     ; Interpreter error related stuff
     runtime_error_no_state_start db "RuntimeError: ", 0
     runtime_error_start db "RuntimeError", 0
-    runtime_error_variable_not_found db "Variable not found", 0
-    runtime_error_not_enough_arguments db "Not enough arguments", 0
-    runtime_error_could_not_open_file db "Could not open file", 0
-    runtime_error_div_by_zero db "Division by 0", 0
-    runtime_error_mul_overflow db "Overflowed beyond 16-bit when multiplying", 0
-    runtime_error_invalid_operator_types db "Invalid operator types", 0
-    runtime_error_invalid_operator_type db "Invalid operator type", 0
-    runtime_error_expected_number db "Expected number", 0
-    runtime_error_expected_vector db "Expected vector", 0
-    runtime_error_invalid_argument_values db "Invalid argument values", 0
-    runtime_error_allocation_failure db "Allocation failure", 0
-    runtime_error_too_many_variables db "Too many variables defined", 0
+
+    ; Parsing-related error messages (lexer+parser)
+    error_message_invalid_token db "Invalid token", 0
+    error_message_syntax_error db "Syntax error", 0
+    error_message_expected_newline db "Expected newline", 0
+    error_message_unexpected_newline db "Unxpected newline", 0
+    error_message_unexpected_token db "Unxpected token", 0
+    error_message_number_too_big db "Number too big", 0
+    error_message_too_many_instructions db "Too many instructions", 0
+    ; Runtime-relater error messages (interpreter)
+    error_message_variable_not_found db "Variable not found", 0
+    error_message_not_enough_arguments db "Not enough arguments", 0
+    error_message_could_not_open_file db "Could not open file", 0
+    error_message_div_by_zero db "Division by 0", 0
+    error_message_mul_overflow db "Overflowed beyond 16-bit when multiplying", 0
+    error_message_invalid_operator_types db "Invalid operator types", 0
+    error_message_invalid_operator_type db "Invalid operator type", 0
+    error_message_expected_number db "Expected number", 0
+    error_message_expected_vector db "Expected vector", 0
+    error_message_invalid_argument_values db "Invalid argument values", 0
+    error_message_allocation_failure db "Allocation failure", 0
+    error_message_too_many_variables db "Too many variables defined", 0
 
     ; Panic related stuff
     panic_message db "* PANIC *", 0
@@ -653,7 +651,7 @@ exact_fit:
     jnc allocation_success
 
     ; If we got here, we had an allocation failure
-    push offset runtime_error_allocation_failure
+    push offset error_message_allocation_failure
     call interpreter_runtime_error_no_state
 
 allocation_success:
@@ -918,7 +916,7 @@ proc open_file
     jne @@has_filename
 
     ; If we got here, there are not enough arguments
-    push offset runtime_error_not_enough_arguments
+    push offset error_message_not_enough_arguments
     call interpreter_runtime_error_no_state
 
 @@has_filename:
@@ -946,7 +944,7 @@ proc open_file
     jnc @@file_open_succeeded
 
     ; If we couldn't open the file
-    push offset runtime_error_could_not_open_file
+    push offset error_message_could_not_open_file
     call interpreter_runtime_error_no_state
 
 @@file_open_succeeded:
@@ -1320,7 +1318,7 @@ loop_digits:
 
     ; If we got here the number was too big
     push [token_start_idx]
-    push offset parser_error_number_too_big
+    push offset error_message_number_too_big
     call parser_error
 
 @@number_in_range:
@@ -1507,7 +1505,7 @@ proc lex_string
 
 @@error_newline_reached:
     push [backtrack]
-    push offset parser_error_unexpected_newline
+    push offset error_message_unexpected_newline
     call parser_error
 
 @@lex_failed:
@@ -2031,7 +2029,7 @@ proc lex
     test ax, ax
     jnz @@end_lex
 
-    push offset lexer_error_invalid_token
+    push offset error_message_invalid_token
     call lexer_error
 
 @@lex_failed:
@@ -2354,7 +2352,7 @@ proc parser_expect_newline
 
     ; Error otherwise
     push [backtrack]
-    push offset parser_error_expected_newline
+    push offset error_message_expected_newline
     call parser_error
 
 @@newline_reached:
@@ -2531,7 +2529,7 @@ proc parser_parse_expr_vector
     call expr_delete
 
     push [file_idx]
-    push offset parser_error_syntax_error
+    push offset error_message_syntax_error
     call parser_error
 
 @@parse_end:
@@ -2577,7 +2575,7 @@ proc parser_parse_expr_paren
 @@error_expected_expr:
 @@error_expected_right_paren:
     push [file_idx]
-    push offset parser_error_syntax_error
+    push offset error_message_syntax_error
     call parser_error
 
 @@end_parse_paren:
@@ -2628,7 +2626,7 @@ proc parser_parse_expr_prefix
 
 @@error_expected_expr:
     push [file_idx]
-    push offset parser_error_syntax_error
+    push offset error_message_syntax_error
     call parser_error
 
 @@end_parse:
@@ -2802,7 +2800,7 @@ proc parser_parse_expr_precedence
 
 @@error_expected_expr:
     push [file_idx]
-    push offset parser_error_syntax_error
+    push offset error_message_syntax_error
     call parser_error
 
 @@parse_expr_failed:
@@ -2935,7 +2933,7 @@ proc parser_parse_assignment
 @@error_no_equal_sign:
 @@error_no_value:
     push [file_idx]
-    push offset parser_error_invalid_token
+    push offset error_message_invalid_token
     call parser_error
     jmp @@end_parse
 
@@ -3016,14 +3014,14 @@ proc parser_parse_if
 
 @@if_error_no_value:
     push [file_idx]
-    push offset parser_error_invalid_token
+    push offset error_message_invalid_token
     call parser_error
     jmp @@end_parse
 
 @@not_found_else_block:
 @@if_error_no_block:
     push [file_idx]
-    push offset parser_error_syntax_error
+    push offset error_message_syntax_error
     call parser_error
     jmp @@end_parse
 
@@ -3082,13 +3080,13 @@ proc parser_parse_loop
 
 @@loop_error_no_value:
     push [file_idx]
-    push offset parser_error_invalid_token
+    push offset error_message_invalid_token
     call parser_error
     jmp @@end_parse
 
 @@loop_error_no_block:
     push [file_idx]
-    push offset parser_error_syntax_error
+    push offset error_message_syntax_error
     call parser_error
     jmp @@end_parse
 
@@ -3137,7 +3135,7 @@ proc parser_parse_instruction_one_arg
 
 @@error_no_arg:
     push [file_idx]
-    push offset parser_error_syntax_error
+    push offset error_message_syntax_error
     call parser_error
 
 @@parse_failed:
@@ -3197,13 +3195,13 @@ proc parser_parse_instruction_two_args
 
 @@error_no_comma:
     push [file_idx]
-    push offset parser_error_unexpected_token
+    push offset error_message_unexpected_token
     call parser_error
 
 @@error_no_arg1:
 @@error_no_arg2:
     push [file_idx]
-    push offset parser_error_syntax_error
+    push offset error_message_syntax_error
     call parser_error
 
 @@parse_failed:
@@ -3431,7 +3429,7 @@ proc parser_parse
 
 @@error_too_many_instructions:
     push [file_idx]
-    push offset parser_error_too_many_instructions
+    push offset error_message_too_many_instructions
     call parser_error
 
     ; End of parsing
@@ -3452,7 +3450,7 @@ proc parser_parse
 
     ; Error
     push [file_idx]
-    push offset parser_error_syntax_error
+    push offset error_message_syntax_error
     call parser_error
 
 @@no_code_remainer:
@@ -3548,7 +3546,7 @@ proc operator_mul_func
 
     ; If we got here, we overflowed
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_mul_overflow
+    push offset error_message_mul_overflow
     call interpreter_runtime_error
 
 @@not_overflowed:
@@ -3579,7 +3577,7 @@ proc operator_div_func
     mov es, ax
 
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_div_by_zero
+    push offset error_message_div_by_zero
     call interpreter_runtime_error
 
 @@not_div_by_zero:
@@ -3623,7 +3621,7 @@ proc operator_mod_func
     mov es, ax
 
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_div_by_zero
+    push offset error_message_div_by_zero
     call interpreter_runtime_error
 
 @@not_div_by_zero:
@@ -4498,7 +4496,7 @@ proc expr_var_eval
 
     ; If we got here, we didn't find a variable
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_variable_not_found
+    push offset error_message_variable_not_found
     call interpreter_runtime_error
 
 found_variable:
@@ -4555,7 +4553,7 @@ proc expr_binary_eval
     mov ax, [expr_ptr]
     mov es, ax
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_invalid_operator_types
+    push offset error_message_invalid_operator_types
     call interpreter_runtime_error
 
 @@type_match:
@@ -4678,7 +4676,7 @@ proc expr_neg_eval
     mov ax, [expr_ptr]
     mov es, ax
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_invalid_operator_type
+    push offset error_message_invalid_operator_type
     call interpreter_runtime_error
 
 @@had_fn:
@@ -5104,7 +5102,7 @@ proc expr_vector_eval
     mov es, ax
     ; Call error with the index of x
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_expected_number
+    push offset error_message_expected_number
     call interpreter_runtime_error
 
 @@y_not_number:
@@ -5116,7 +5114,7 @@ proc expr_vector_eval
     mov es, ax
     ; Call error with the index of y
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_expected_number
+    push offset error_message_expected_number
     call interpreter_runtime_error
 
 @@end_eval:
@@ -5473,7 +5471,7 @@ proc instruction_line_execute
     mov es, ax
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_expected_vector
+    push offset error_message_expected_vector
     call interpreter_runtime_error
 
 @@error_arg2_not_number:
@@ -5484,7 +5482,7 @@ proc instruction_line_execute
     mov es, ax
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_expected_number
+    push offset error_message_expected_number
     call interpreter_runtime_error
 
 @@error_invalid_arguments:
@@ -5492,7 +5490,7 @@ proc instruction_line_execute
     mov es, ax
     ; Error
     push [es:INSTRUCTION_OFF_FILE_INDEX]
-    push offset runtime_error_invalid_argument_values
+    push offset error_message_invalid_argument_values
     call interpreter_runtime_error
 
 @@end_execute:
@@ -5622,7 +5620,7 @@ proc instruction_position_size_execute
     mov es, ax
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_expected_vector
+    push offset error_message_expected_vector
     call interpreter_runtime_error
 
 @@error_arg2_not_vector:
@@ -5633,7 +5631,7 @@ proc instruction_position_size_execute
     mov es, ax
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_expected_vector
+    push offset error_message_expected_vector
     call interpreter_runtime_error
 
 @@error_invalid_arguments:
@@ -5641,7 +5639,7 @@ proc instruction_position_size_execute
     mov es, ax
     ; Error
     push [es:INSTRUCTION_OFF_FILE_INDEX]
-    push offset runtime_error_invalid_argument_values
+    push offset error_message_invalid_argument_values
     call interpreter_runtime_error
 
 @@end_execute:
@@ -5780,14 +5778,14 @@ proc instruction_setcolor_execute
     mov ax, [es:INSTRUCTION_ONE_ARG_OFF_ARG]
     mov es, ax
     push [es:EXPR_OFF_FILE_INDEX]
-    push offset runtime_error_expected_number
+    push offset error_message_expected_number
     call interpreter_runtime_error
 
 @@error_invalid_argument:
     mov ax, [instruction_ptr]
     mov es, ax
     push [es:INSTRUCTION_OFF_FILE_INDEX]
-    push offset runtime_error_invalid_argument_values
+    push offset error_message_invalid_argument_values
     call interpreter_runtime_error
 
 @@end_execute:
@@ -6037,7 +6035,7 @@ proc interpreter_set_variable
     jmp @@variable_was_set
 
 @@error_too_many_variables:
-    push offset runtime_error_too_many_variables
+    push offset error_message_too_many_variables
     call interpreter_runtime_error_no_state
 
 @@variable_was_set:
