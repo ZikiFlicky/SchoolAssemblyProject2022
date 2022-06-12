@@ -290,12 +290,11 @@ DATASEG
     OBJECT_MAX_SIZE = 8
 
     ; Interpreter variables
-    ; TODO: Make this a hashmap?
-    ; FIXME: Allows up to 16 variables
-    variables dw 10h * 2 dup(?)
+    MAX_AMOUNT_VARIABLES = 20h
+    variables dw MAX_AMOUNT_VARIABLES * 2 dup(?) ; Stores cstr-object pairs
     amount_variables dw 0
     ; Interpreter currently used color
-    graphics_color db 0Fh
+    graphics_color db 0Fh ; Start color is white
 
     GRAPHICS_SCREEN_WIDTH = 320
     GRAPHICS_SCREEN_HEIGHT = 200
@@ -336,7 +335,7 @@ DATASEG
     runtime_error_expected_vector db "Expected vector", 0
     runtime_error_invalid_argument_values db "Invalid argument values", 0
     runtime_error_allocation_failure db "Allocation failure", 0
-
+    runtime_error_too_many_variables db "Too many variables defined", 0
 
     ; Panic related stuff
     panic_message db "* PANIC *", 0
@@ -6027,11 +6026,19 @@ proc interpreter_set_variable
     jmp @@find_variable
 
 @@add_new_variable:
+    cmp [word ptr amount_variables], MAX_AMOUNT_VARIABLES
+    je @@error_too_many_variables
+
     inc [word ptr amount_variables]
     mov ax, [key]
     mov [bx + 0], ax
     mov ax, [value]
     mov [bx + 2], ax
+    jmp @@variable_was_set
+
+@@error_too_many_variables:
+    push offset runtime_error_too_many_variables
+    call interpreter_runtime_error_no_state
 
 @@variable_was_set:
 
