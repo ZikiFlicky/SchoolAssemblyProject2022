@@ -5,12 +5,10 @@ DATASEG
     ; Misc
     PSP_segment dw ?
 
-
     ; File related
-    file dw ?
-    file_idx dw 0
-    file_read_buffer db 100h dup(?)
-
+    file dw ? ; Stores handle
+    file_idx dw 0 ; Stores index
+    file_read_buffer db 40h dup(?) ; Small read buffer
 
     ; Global token information
     token_type db ?
@@ -53,6 +51,7 @@ DATASEG
     TOKEN_TYPE_DIAGONALLINE = 33
     TOKEN_TYPE_SETCOLOR = 34
     TOKEN_TYPE_SETWRITEPOS = 35
+    TOKEN_TYPE_CHR = 36
 
     ; Token offsets
     TOKEN_OFF_TYPE = 0
@@ -73,11 +72,12 @@ DATASEG
     keyword_setcolor db TOKEN_TYPE_SETCOLOR, 8, "SetColor"
     keyword_diagonalline db TOKEN_TYPE_DIAGONALLINE, 12, "DiagonalLine"
     keyword_setwritepos db TOKEN_TYPE_SETWRITEPOS, 11, "SetWritePos"
+    keyword_chr db TOKEN_TYPE_CHR, 3, "chr"
     keywords dw offset keyword_show, offset keyword_if, offset keyword_else
              dw offset keyword_loop, offset keyword_xline, offset keyword_yline
              dw offset keyword_rect, offset keyword_filledrect, offset keyword_setcolor
-             dw offset keyword_diagonalline, offset keyword_setwritepos
-    AMOUNT_KEYWORDS = 11
+             dw offset keyword_diagonalline, offset keyword_setwritepos, offset keyword_chr
+    AMOUNT_KEYWORDS = 12
 
     single_byte_tokens db TOKEN_TYPE_EQU, '='
                        db TOKEN_TYPE_PLUS, '+'
@@ -124,6 +124,7 @@ DATASEG
     EXPR_TYPE_NOT = 17
     EXPR_TYPE_STRING = 18
     EXPR_TYPE_VECTOR = 19
+    EXPR_TYPE_CHR = 20
 
     ; Expr offsets
     EXPR_OFF_TYPE = 0
@@ -257,8 +258,9 @@ DATASEG
     OBJECT_TYPE_OFF_FN_SMALLER_EQ = 18
     OBJECT_TYPE_OFF_FN_BIGGER_EQ = 20
     OBJECT_TYPE_OFF_FN_NEG = 22
-    OBJECT_TYPE_OFF_FN_TO_BOOL = 24
-    OBJECT_TYPE_OFF_FN_SHOW = 26
+    OBJECT_TYPE_OFF_FN_CHR = 24
+    OBJECT_TYPE_OFF_FN_TO_BOOL = 26
+    OBJECT_TYPE_OFF_FN_SHOW = 28
 
     ; Object types
     object_number_type dw 0
@@ -273,6 +275,7 @@ DATASEG
                        dw offset object_number_smaller_eq
                        dw offset object_number_bigger_eq
                        dw offset object_number_neg
+                       dw offset object_number_chr
                        dw offset object_number_to_bool
                        dw offset object_number_show
 
@@ -288,6 +291,7 @@ DATASEG
                        dw 0
                        dw 0
                        dw 0
+                       dw offset object_string_chr
                        dw offset object_string_to_bool
                        dw offset object_string_show
 
@@ -298,6 +302,7 @@ DATASEG
                        dw 0
                        dw 0
                        dw offset object_vector_eq
+                       dw 0
                        dw 0
                        dw 0
                        dw 0
@@ -338,6 +343,8 @@ DATASEG
     GRAPHICS_SCREEN_LINE_WIDTH = 40
     GRAPHICS_SCREEN_AMOUNT_LINES = 24
 
+    GRAPHICS_AMOUNT_COLORS = 16 ; We have 16 possible colors
+
     ; Error related stuff
     file_error_line_message db " [line ", 0
     file_error_column_message db ", column ", 0
@@ -373,6 +380,8 @@ DATASEG
     error_message_invalid_argument_values db "Invalid argument values", 0
     error_message_allocation_failure db "Allocation failure", 0
     error_message_too_many_variables db "Too many variables defined", 0
+    error_message_chr_number_invalid db "Chr number invalid", 0
+    error_message_string_not_char db "String not a char-string (a string of length 1)", 0
 
     ; Panic related stuff
     panic_message db "* PANIC *", 0
@@ -444,6 +453,34 @@ proc number_get_direction
     pop bp
     ret 2
 endp number_get_direction
+
+; Returns whether the number is >=start and <end
+number = bp + 4
+range_start = bp + 6
+range_end = bp + 8
+proc number_validate
+    push bp
+    mov bp, sp
+
+    mov ax, [number]
+    cmp ax, [range_start]
+    jl @@number_invalid
+
+    cmp ax, [range_end]
+    jge @@number_invalid
+
+    ; If we got here the number is valid
+    mov ax, 1
+    jmp @@number_validation_end
+
+@@number_invalid:
+    mov ax, 0
+
+@@number_validation_end:
+
+    pop bp
+    ret 6
+endp number_validate
 
 ; Returns whether the given char is a character that can start a variable
 character = bp + 4
@@ -2152,6 +2189,8 @@ proc expr_delete
     je @@choice_binary
     cmp al, EXPR_TYPE_NEG
     je @@choice_single
+    cmp al, EXPR_TYPE_CHR
+    je @@choice_single
     cmp al, EXPR_TYPE_STRING
     je @@choice_sting
 
@@ -2845,6 +2884,14 @@ proc parser_parse_expr_not
     ret
 endp parser_parse_expr_not
 
+; Parse the `chr`
+proc parser_parse_expr_chr
+    push EXPR_TYPE_CHR
+    push TOKEN_TYPE_CHR
+    call parser_parse_expr_prefix
+    ret
+endp parser_parse_expr_chr
+
 ; Parse a variable
 var_name = bp - 2
 backtrack = bp - 4
@@ -2905,6 +2952,9 @@ proc parser_parse_expr_single
     test ax, ax
     jnz @@end_parse
     call parser_parse_expr_not
+    test ax, ax
+    jnz @@end_parse
+    call parser_parse_expr_chr
     test ax, ax
     jnz @@end_parse
     call parser_parse_expr_var
@@ -4258,6 +4308,42 @@ proc object_number_neg
     ret 2
 endp object_number_neg
 
+; Define a chr method/function for the number object
+object_ptr = bp + 4
+number = bp - 2
+proc object_number_chr
+    push bp
+    mov bp, sp
+    sub sp, 2
+
+    push [object_ptr]
+    call object_number_get
+    mov [number], ax
+
+    ; Check that the number is byte-like (between 0 and 255)
+    push 256
+    push 0
+    push ax
+    call number_validate
+    test ax, ax
+    jz @@error_number_invalid
+
+    ; Create a single-char number from the byte-like word
+    push [number]
+    call object_string_single_char_new
+    jmp @@end_run
+
+@@error_number_invalid:
+    push offset error_message_chr_number_invalid
+    call interpreter_runtime_error_no_state
+
+@@end_run:
+
+    add sp, 2
+    pop bp
+    ret 2
+endp object_number_chr
+
 ; Returns whether number is truthy
 object_ptr = bp + 4
 proc object_number_to_bool
@@ -4368,6 +4454,44 @@ proc object_string_eq
     ret 4
 endp object_string_eq
 
+; Define a chr method/function for the string object
+object_ptr = bp + 4
+proc object_string_chr
+    push bp
+    mov bp, sp
+    push es
+
+    ; Store the object segment in es
+    mov ax, [object_ptr]
+    mov es, ax
+
+    ; String must be of length 1
+    cmp [word ptr es:OBJECT_STRING_OFF_LENGTH], 1
+    jne @@error_string_invalid
+
+    ; Store source segment in es
+    mov ax, [es:OBJECT_STRING_OFF_SOURCE]
+    mov es, ax
+
+    ; Get first byte and make it a word
+    mov al, [es:0]
+    cbw
+    ; Create a number object from the word
+    push ax
+    call object_number_new
+    jmp @@end_run
+
+@@error_string_invalid:
+    push offset error_message_string_not_char
+    call interpreter_runtime_error_no_state
+
+@@end_run:
+
+    pop es
+    pop bp
+    ret 2
+endp object_string_chr
+
 ; Convert string to a boolean value (if length > 0, 1 otherwise 0)
 object_ptr = bp + 4
 proc object_string_to_bool
@@ -4394,6 +4518,46 @@ proc object_string_to_bool
     pop bp
     ret 2
 endp object_string_to_bool
+
+char = bp + 4
+cstr_ptr = bp - 2
+proc object_string_single_char_new
+    push bp
+    mov bp, sp
+    sub sp, 2
+    push es
+
+    ; Allocate cstr
+    push 1 + 1 ; Byte + NUL
+    call heap_alloc
+    mov es, ax
+    ; Set first char
+    mov ax, [char]
+    mov [es:0], al ; Add character
+    mov [byte ptr es:1], 0 ; Add NUL
+
+    ; Store cstr
+    mov ax, es
+    mov [cstr_ptr], ax
+
+    ; Create new string object
+    push offset object_string_type
+    call object_new
+    mov es, ax
+
+    ; Set string info
+    mov [word ptr es:OBJECT_STRING_OFF_LENGTH], 1
+    mov ax, [cstr_ptr]
+    mov [es:OBJECT_STRING_OFF_SOURCE], ax
+
+    ; Return string object
+    mov ax, es
+
+    pop es
+    add sp, 2
+    pop bp
+    ret 2
+endp object_string_single_char_new
 
 ; Vector object
 
@@ -4694,62 +4858,16 @@ proc object_to_bool
     ret 2
 endp object_to_bool
 
-; Evaluate a number expression and return the resulted number object
-expr_ptr = bp + 4
-proc expr_number_eval
-    push bp
-    mov bp, sp
-    push es
+; Expr evluation functions
 
-    ; Store the expr segment
-    mov ax, [expr_ptr]
-    mov es, ax
-
-    ; Create the number object
-    push [es:EXPR_NUMBER_OFF_NUMBER]
-    call object_number_new
-
-    pop es
-    pop bp
-    ret 2
-endp expr_number_eval
-
-; Evaluate a variable expression and return the matched value (if we can't find the variable, we error): var
-expr_ptr = bp + 4
-proc expr_var_eval
-    push bp
-    mov bp, sp
-    push es
-
-    mov ax, [expr_ptr]
-    mov es, ax
-
-    push [es:EXPR_VAR_OFF_NAME]
-    call interpreter_get_variable
-
-    test ax, ax
-    jnz @@found_variable
-
-    ; If we got here, we didn't find a variable
-    push [es:EXPR_OFF_FILE_INDEX]
-    push offset error_message_variable_not_found
-    call interpreter_runtime_error
-
-@@found_variable:
-
-    pop es
-    pop bp
-    ret 2
-endp expr_var_eval
-
-; General function to evaluate a binary expression (like + or *)
+; General function for evaluating type-dependent binary operators (like + or *)
 expr_ptr = bp + 4
 func_offset = bp + 6
 lhs_value = bp - 2
 rhs_value = bp - 4
 lhs_type = bp - 6
 rhs_type = bp - 8
-proc expr_binary_eval
+proc expr_binary_operator_eval
     push bp
     mov bp, sp
     sub sp, 8
@@ -4813,85 +4931,14 @@ proc expr_binary_eval
     add sp, 8
     pop bp
     ret 4
-endp expr_binary_eval
+endp expr_binary_operator_eval
 
-; Evaluate a `+` expression and return the resulted value: a + b
+; General function for evaluating type-dependent prefix operators
 expr_ptr = bp + 4
-proc expr_add_eval
+func_offset = bp + 6
+proc expr_prefix_operator_eval
     push bp
     mov bp, sp
-
-    push OBJECT_TYPE_OFF_FN_ADD
-    push [expr_ptr]
-    call expr_binary_eval
-
-    pop bp
-    ret 2
-endp expr_add_eval
-
-; Evaluate a `-` expression and return the resulted value: a - b
-expr_ptr = bp + 4
-proc expr_sub_eval
-    push bp
-    mov bp, sp
-
-    push OBJECT_TYPE_OFF_FN_SUB
-    push [expr_ptr]
-    call expr_binary_eval
-
-    pop bp
-    ret 2
-endp expr_sub_eval
-
-; Evaluate a `*` expression and return the resulted value: a * b
-expr_ptr = bp + 4
-proc expr_mul_eval
-    push bp
-    mov bp, sp
-
-    push OBJECT_TYPE_OFF_FN_MUL
-    push [expr_ptr]
-    call expr_binary_eval
-
-    pop bp
-    ret 2
-endp expr_mul_eval
-
-; Evaluate a `/` expression and return the resulted value: a / b
-expr_ptr = bp + 4
-proc expr_div_eval
-    push bp
-    mov bp, sp
-
-    push OBJECT_TYPE_OFF_FN_DIV
-    push [expr_ptr]
-    call expr_binary_eval
-
-    pop bp
-    ret 2
-endp expr_div_eval
-
-; Evaluate a `%` expression and return the resulted value: a % b
-expr_ptr = bp + 4
-proc expr_mod_eval
-    push bp
-    mov bp, sp
-
-    push OBJECT_TYPE_OFF_FN_MOD
-    push [expr_ptr]
-    call expr_binary_eval
-
-    pop bp
-    ret 2
-endp expr_mod_eval
-
-; Evaluate a `-value` expression and return the resulted value: -a
-expr_ptr = bp + 4
-neg_number = bp - 2
-proc expr_neg_eval
-    push bp
-    mov bp, sp
-    sub sp, 2
     push bx
     push es
 
@@ -4903,7 +4950,8 @@ proc expr_neg_eval
     mov es, ax
 
     mov bx, [es:OBJECT_OFF_TYPE]
-    mov ax, [bx + OBJECT_TYPE_OFF_FN_NEG]
+    add bx, [func_offset]
+    mov ax, [bx]
 
     ; Check if NEG is a function that's defined
     test ax, ax
@@ -4925,10 +4973,260 @@ proc expr_neg_eval
 
     pop es
     pop bx
-    add sp, 2
+    pop bp
+    ret 4
+endp expr_prefix_operator_eval
+
+
+; Evaluate a number expression and return the resulted number object
+expr_ptr = bp + 4
+proc expr_number_eval
+    push bp
+    mov bp, sp
+    push es
+
+    ; Store the expr segment
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    ; Create the number object
+    push [es:EXPR_NUMBER_OFF_NUMBER]
+    call object_number_new
+
+    pop es
     pop bp
     ret 2
-endp expr_neg_eval
+endp expr_number_eval
+
+
+; Evaluate a string expression and return the resulted string: "string"
+expr_ptr = bp + 4
+source = bp - 2
+string_length = bp - 4
+proc expr_string_eval
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push es
+
+    ; Store the expr segment
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    ; Store the string
+    mov ax, [es:EXPR_STRING_OFF_SOURCE]
+    mov [source], ax
+    mov ax, [es:EXPR_STRING_OFF_LENGTH]
+    mov [string_length], ax
+
+    ; Create a value
+    push offset object_string_type
+    call object_new
+    mov es, ax
+
+    ; Set the value's string
+    mov ax, [source]
+    mov [es:OBJECT_STRING_OFF_SOURCE], ax
+    mov ax, [string_length]
+    mov [es:OBJECT_STRING_OFF_LENGTH], ax
+
+    ; Set ax to new value so we can return it
+    mov ax, es
+
+    pop es
+    add sp, 4
+    pop bp
+    ret 2
+endp expr_string_eval
+
+; Evaluate a vector expression and return the resulted vector: (x, y)
+expr_ptr = bp + 4
+x_value = bp - 2
+y_value = bp - 4
+x_number = bp - 6
+y_number = bp - 8
+proc expr_vector_eval
+    push bp
+    mov bp, sp
+    sub sp, 8
+    push es
+
+    ; Store the expr segment
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    push [es:EXPR_VECTOR_OFF_X]
+    call expr_eval
+    mov [x_value], ax
+
+    push [es:EXPR_VECTOR_OFF_Y]
+    call expr_eval
+    mov [y_value], ax
+
+    mov ax, [x_value]
+    mov es, ax
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
+    jne @@x_not_number
+    push [x_value]
+    call object_number_get
+    mov [x_number], ax
+
+    mov ax, [y_value]
+    mov es, ax
+    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
+    jne @@y_not_number
+    push [y_value]
+    call object_number_get
+    mov [y_number], ax
+
+    ; Create a vector object
+    push offset object_vector_type
+    call object_new
+    mov es, ax
+    ; Set the object's information
+    mov ax, [x_number]
+    mov [es:OBJECT_VECTOR_OFF_X], ax
+    mov ax, [y_number]
+    mov [es:OBJECT_VECTOR_OFF_Y], ax
+
+    ; Set ax to new value so we can return it
+    mov ax, es
+    jmp @@end_eval
+
+@@x_not_number:
+    ; Set es to expr
+    mov ax, [expr_ptr]
+    mov es, ax
+    ; Set es to x of vector expr
+    mov ax, [es:EXPR_VECTOR_OFF_X]
+    mov es, ax
+    ; Call error with the index of x
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset error_message_expected_number
+    call interpreter_runtime_error
+
+@@y_not_number:
+    ; Set es to expr
+    mov ax, [expr_ptr]
+    mov es, ax
+    ; Set es to y of vector expr
+    mov ax, [es:EXPR_VECTOR_OFF_Y]
+    mov es, ax
+    ; Call error with the index of y
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset error_message_expected_number
+    call interpreter_runtime_error
+
+@@end_eval:
+
+    push [x_value]
+    call object_deref
+    push [y_value]
+    call object_deref
+
+    pop es
+    add sp, 8
+    pop bp
+    ret 2
+endp expr_vector_eval
+
+; Evaluate a variable expression and return the matched value (if we can't find the variable, we error): var
+expr_ptr = bp + 4
+proc expr_var_eval
+    push bp
+    mov bp, sp
+    push es
+
+    mov ax, [expr_ptr]
+    mov es, ax
+
+    push [es:EXPR_VAR_OFF_NAME]
+    call interpreter_get_variable
+
+    test ax, ax
+    jnz @@found_variable
+
+    ; If we got here, we didn't find a variable
+    push [es:EXPR_OFF_FILE_INDEX]
+    push offset error_message_variable_not_found
+    call interpreter_runtime_error
+
+@@found_variable:
+
+    pop es
+    pop bp
+    ret 2
+endp expr_var_eval
+
+; Evaluate a `+` expression and return the resulted value: a + b
+expr_ptr = bp + 4
+proc expr_add_eval
+    push bp
+    mov bp, sp
+
+    push OBJECT_TYPE_OFF_FN_ADD
+    push [expr_ptr]
+    call expr_binary_operator_eval
+
+    pop bp
+    ret 2
+endp expr_add_eval
+
+; Evaluate a `-` expression and return the resulted value: a - b
+expr_ptr = bp + 4
+proc expr_sub_eval
+    push bp
+    mov bp, sp
+
+    push OBJECT_TYPE_OFF_FN_SUB
+    push [expr_ptr]
+    call expr_binary_operator_eval
+
+    pop bp
+    ret 2
+endp expr_sub_eval
+
+; Evaluate a `*` expression and return the resulted value: a * b
+expr_ptr = bp + 4
+proc expr_mul_eval
+    push bp
+    mov bp, sp
+
+    push OBJECT_TYPE_OFF_FN_MUL
+    push [expr_ptr]
+    call expr_binary_operator_eval
+
+    pop bp
+    ret 2
+endp expr_mul_eval
+
+; Evaluate a `/` expression and return the resulted value: a / b
+expr_ptr = bp + 4
+proc expr_div_eval
+    push bp
+    mov bp, sp
+
+    push OBJECT_TYPE_OFF_FN_DIV
+    push [expr_ptr]
+    call expr_binary_operator_eval
+
+    pop bp
+    ret 2
+endp expr_div_eval
+
+; Evaluate a `%` expression and return the resulted value: a % b
+expr_ptr = bp + 4
+proc expr_mod_eval
+    push bp
+    mov bp, sp
+
+    push OBJECT_TYPE_OFF_FN_MOD
+    push [expr_ptr]
+    call expr_binary_operator_eval
+
+    pop bp
+    ret 2
+endp expr_mod_eval
 
 ; Evaluate a `==` expression and return the resulted value: a == b
 expr_ptr = bp + 4
@@ -5033,7 +5331,7 @@ proc expr_cmp_smaller_eval
 
     push OBJECT_TYPE_OFF_FN_SMALLER
     push [expr_ptr]
-    call expr_binary_eval
+    call expr_binary_operator_eval
 
     pop bp
     ret 2
@@ -5047,7 +5345,7 @@ proc expr_cmp_bigger_eval
 
     push OBJECT_TYPE_OFF_FN_BIGGER
     push [expr_ptr]
-    call expr_binary_eval
+    call expr_binary_operator_eval
 
     pop bp
     ret 2
@@ -5061,7 +5359,7 @@ proc expr_cmp_smaller_equals_eval
 
     push OBJECT_TYPE_OFF_FN_SMALLER_EQ
     push [expr_ptr]
-    call expr_binary_eval
+    call expr_binary_operator_eval
 
     pop bp
     ret 2
@@ -5075,7 +5373,7 @@ proc expr_cmp_bigger_equals_eval
 
     push OBJECT_TYPE_OFF_FN_BIGGER_EQ
     push [expr_ptr]
-    call expr_binary_eval
+    call expr_binary_operator_eval
 
     pop bp
     ret 2
@@ -5235,136 +5533,33 @@ proc expr_not_eval
     ret 2
 endp expr_not_eval
 
-; Evaluate a string expression and return the resulted string: "string"
+; Evaluate a `-value` expression and return the resulted value: -a
 expr_ptr = bp + 4
-source = bp - 2
-string_length = bp - 4
-proc expr_string_eval
+proc expr_neg_eval
     push bp
     mov bp, sp
-    sub sp, 4
-    push es
 
-    ; Store the expr segment
-    mov ax, [expr_ptr]
-    mov es, ax
+    push OBJECT_TYPE_OFF_FN_NEG
+    push [expr_ptr]
+    call expr_prefix_operator_eval
 
-    ; Store the string
-    mov ax, [es:EXPR_STRING_OFF_SOURCE]
-    mov [source], ax
-    mov ax, [es:EXPR_STRING_OFF_LENGTH]
-    mov [string_length], ax
-
-    ; Create a value
-    push offset object_string_type
-    call object_new
-    mov es, ax
-
-    ; Set the value's string
-    mov ax, [source]
-    mov [es:OBJECT_STRING_OFF_SOURCE], ax
-    mov ax, [string_length]
-    mov [es:OBJECT_STRING_OFF_LENGTH], ax
-
-    ; Set ax to new value so we can return it
-    mov ax, es
-
-    pop es
-    add sp, 4
     pop bp
     ret 2
-endp expr_string_eval
+endp expr_neg_eval
 
-; Evaluate a vector expression and return the resulted vector: (x, y)
+; Evaluate a `chr` expression and return the resulted value: chr a
 expr_ptr = bp + 4
-x_value = bp - 2
-y_value = bp - 4
-x_number = bp - 6
-y_number = bp - 8
-proc expr_vector_eval
+proc expr_chr_eval
     push bp
     mov bp, sp
-    sub sp, 8
-    push es
 
-    ; Store the expr segment
-    mov ax, [expr_ptr]
-    mov es, ax
+    push OBJECT_TYPE_OFF_FN_CHR
+    push [expr_ptr]
+    call expr_prefix_operator_eval
 
-    push [es:EXPR_VECTOR_OFF_X]
-    call expr_eval
-    mov [x_value], ax
-
-    push [es:EXPR_VECTOR_OFF_Y]
-    call expr_eval
-    mov [y_value], ax
-
-    mov ax, [x_value]
-    mov es, ax
-    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
-    jne @@x_not_number
-    push [x_value]
-    call object_number_get
-    mov [x_number], ax
-
-    mov ax, [y_value]
-    mov es, ax
-    cmp [word ptr es:OBJECT_OFF_TYPE], offset object_number_type
-    jne @@y_not_number
-    push [y_value]
-    call object_number_get
-    mov [y_number], ax
-
-    ; Create a value
-    push offset object_vector_type
-    call object_new
-    mov es, ax
-
-    mov ax, [x_number]
-    mov [es:OBJECT_VECTOR_OFF_X], ax
-    mov ax, [y_number]
-    mov [es:OBJECT_VECTOR_OFF_Y], ax
-
-    ; Set ax to new value so we can return it
-    mov ax, es
-    jmp @@end_eval
-
-@@x_not_number:
-    ; Set es to expr
-    mov ax, [expr_ptr]
-    mov es, ax
-    ; Set es to x of vector expr
-    mov ax, [es:EXPR_VECTOR_OFF_X]
-    mov es, ax
-    ; Call error with the index of x
-    push [es:EXPR_OFF_FILE_INDEX]
-    push offset error_message_expected_number
-    call interpreter_runtime_error
-
-@@y_not_number:
-    ; Set es to expr
-    mov ax, [expr_ptr]
-    mov es, ax
-    ; Set es to y of vector expr
-    mov ax, [es:EXPR_VECTOR_OFF_Y]
-    mov es, ax
-    ; Call error with the index of y
-    push [es:EXPR_OFF_FILE_INDEX]
-    push offset error_message_expected_number
-    call interpreter_runtime_error
-
-@@end_eval:
-
-    push [x_value]
-    call object_deref
-    push [y_value]
-    call object_deref
-
-    pop es
-    add sp, 8
     pop bp
     ret 2
-endp expr_vector_eval
+endp expr_chr_eval
 
 ; Evaluate an expression from a segment parameter and return the result object or error
 expr_ptr = bp + 4
@@ -5378,6 +5573,7 @@ proc expr_eval
 
     mov al, [es:EXPR_OFF_TYPE]
 
+    ; Decide on the eval function using this switch case
     cmp al, EXPR_TYPE_NUMBER
     je @@choice_number
     cmp al, EXPR_TYPE_VAR
@@ -5412,6 +5608,8 @@ proc expr_eval
     je @@choice_or
     cmp al, EXPR_TYPE_NOT
     je @@choice_not
+    cmp al, EXPR_TYPE_CHR
+    je @@choice_chr
     cmp al, EXPR_TYPE_STRING
     je @@choice_string
     cmp al, EXPR_TYPE_VECTOR
@@ -5450,6 +5648,10 @@ proc expr_eval
 
 @@choice_neg:
     mov ax, offset expr_neg_eval
+    jmp @@end_choice
+
+@@choice_chr:
+    mov ax, offset expr_chr_eval
     jmp @@end_choice
 
 @@choice_cmp_equals:
@@ -5504,6 +5706,8 @@ proc expr_eval
     pop bp
     ret 2
 endp expr_eval
+
+; Instruction execute functions
 
 ; Execute the `=` code instruction (var = expr)
 instruction_ptr = bp + 4
@@ -5978,10 +6182,11 @@ endp instruction_show_execute
 ; Exectue the `SetColor` code instruction
 instruction_ptr = bp + 4
 arg_ptr = bp - 2
+color = bp - 3
 proc instruction_setcolor_execute
     push bp
     mov bp, sp
-    sub sp, 2
+    sub sp, 3
     push ax
     push es
 
@@ -5998,13 +6203,17 @@ proc instruction_setcolor_execute
     ; Get the actual number from the object
     push es
     call object_number_get
+    mov [color], ax
 
     ; Check if the number is in range of possible values (between 0 and 15)
-    cmp ax, 0
-    jl @@error_invalid_argument
-    cmp ax, 15 ; Max color number
-    jg @@error_invalid_argument
+    push GRAPHICS_AMOUNT_COLORS
+    push 0
+    push ax
+    call number_validate
+    test ax, ax
+    jz @@error_invalid_argument
 
+    mov al, [color]
     mov [graphics_color], al
     jmp @@end_execute
 
@@ -6030,7 +6239,7 @@ proc instruction_setcolor_execute
 
     pop es
     pop ax
-    add sp, 2
+    add sp, 3
     pop bp
     ret 2
 endp instruction_setcolor_execute
@@ -6493,47 +6702,31 @@ proc graphics_convert_position_to_index
     ret 4
 endp graphics_convert_position_to_index
 
-; Sets ax to 1 if x is inside the screen (0<x<width) otherwise sets it to 0
+; Sets ax to 1 if x is inside the screen (0<=x<width) otherwise sets it to 0
 x = bp + 4
 proc graphics_validate_x
     push bp
     mov bp, sp
 
-    cmp [word ptr x], 0
-    jl @@not_possible
-    cmp [word ptr x], GRAPHICS_SCREEN_WIDTH
-    jge @@not_possible
-
-    mov ax, 1
-    jmp @@end_check
-
-@@not_possible:
-    mov ax, 0
-
-@@end_check:
+    push GRAPHICS_SCREEN_WIDTH
+    push 0
+    push [x]
+    call number_validate
 
     pop bp
     ret 2
 endp graphics_validate_x
 
-; Sets ax to 1 if y is inside the screen (0<y<height) otherwise sets it to 0
+; Sets ax to 1 if y is inside the screen (0<=y<height) otherwise sets it to 0
 y = bp + 4
 proc graphics_validate_y
     push bp
     mov bp, sp
 
-    cmp [word ptr y], 0
-    jl @@not_possible
-    cmp [word ptr y], GRAPHICS_SCREEN_HEIGHT
-    jge @@not_possible
-
-    mov ax, 1
-    jmp @@end_check
-
-@@not_possible:
-    mov ax, 0
-
-@@end_check:
+    push GRAPHICS_SCREEN_HEIGHT
+    push 0
+    push [y]
+    call number_validate
 
     pop bp
     ret 2
@@ -6621,47 +6814,31 @@ proc graphics_validate_yline
     ret 6
 endp graphics_validate_yline
 
-; Sets ax to 1 if the argument is a valid x as a text mode index (0<x<line width) otherwise sets it to 0
+; Sets ax to 1 if the argument is a valid x as a text mode index (0<=x<line width) otherwise sets it to 0
 text_x = bp + 4
 proc graphics_validate_text_x
     push bp
     mov bp, sp
 
-    cmp [word ptr text_x], 0
-    jl @@not_possible
-    cmp [word ptr text_x], GRAPHICS_SCREEN_LINE_WIDTH
-    jge @@not_possible
-
-    mov ax, 1
-    jmp @@end_check
-
-@@not_possible:
-    mov ax, 0
-
-@@end_check:
+    push GRAPHICS_SCREEN_LINE_WIDTH
+    push 0
+    push [text_x]
+    call number_validate
 
     pop bp
     ret 2
 endp graphics_validate_text_x
 
-; Sets ax to 1 if the argument is a valid y as a text mode index (0<y<amount lines) otherwise sets it to 0
+; Sets ax to 1 if the argument is a valid y as a text mode index (0<=y<amount lines) otherwise sets it to 0
 text_y = bp + 4
 proc graphics_validate_text_y
     push bp
     mov bp, sp
 
-    cmp [word ptr text_y], 0
-    jl @@not_possible
-    cmp [word ptr text_y], GRAPHICS_SCREEN_AMOUNT_LINES
-    jge @@not_possible
-
-    mov ax, 1
-    jmp @@end_check
-
-@@not_possible:
-    mov ax, 0
-
-@@end_check:
+    push GRAPHICS_SCREEN_AMOUNT_LINES
+    push 0
+    push [text_y]
+    call number_validate
 
     pop bp
     ret 2
