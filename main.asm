@@ -407,6 +407,8 @@ endp exit_fail
 ; Print a panic message and exit
 ; Used in places we don't want or wont ever reach
 proc panic
+    ; Setup color and screen mode
+    call error_setup
     ; Print panic message
     push offset panic_message
     call print_data_cstr
