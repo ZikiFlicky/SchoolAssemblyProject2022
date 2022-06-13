@@ -245,6 +245,9 @@ DATASEG
     parsed_instructions dw MAX_AMOUNT_INSTRUCTIONS dup(?)
     amount_instructions dw 0
 
+    ; Max amount of instructions you can parse into a block
+    MAX_AMOUNT_BLOCK_INSTRUCTIONS = 20h
+
     ; Object type offsets
     OBJECT_TYPE_OFF_FN_DELETE = 0
     OBJECT_TYPE_OFF_FN_ADD = 2
@@ -705,7 +708,6 @@ proc print_word
     ret 2
 endp print_word
 
-; FIXME: The page-size calculation can be optimized so that they happen at compile-time
 ; Allocate `amount` bytes and return the segment of the allocated block
 amount = bp + 4
 proc heap_alloc
@@ -3545,16 +3547,21 @@ proc parser_parse_block
     push bx
     push es
 
+    ; Expect block to start with a '{'
     push TOKEN_TYPE_LEFT_BRACE
     call parser_match
     test ax, ax
-    jz @@parse_failed
+    jnz @@found_left_brace
 
+    ; If not found '{'
+    jmp @@parse_failed
+
+@@found_left_brace:
     push 0 ; Don't error if we don't match the newline
     call parser_expect_newline
 
-    ; FIXME: Be able to extend the list
-    push 2 * 8
+    ; Allocate memory block to store instructions
+    push 2 * MAX_AMOUNT_BLOCK_INSTRUCTIONS
     call heap_alloc
     mov es, ax
 
@@ -3566,6 +3573,10 @@ proc parser_parse_block
     test ax, ax
     jnz @@finish_parse
 
+    ; If we can't parse anymore (exceeded maximum amount of instructions)
+    cmp [word ptr block_length], MAX_AMOUNT_BLOCK_INSTRUCTIONS
+    je @@error_too_many_instructions
+
     call parser_parse_instruction
     test ax, ax
     jz @@parse_failed
@@ -3576,6 +3587,11 @@ proc parser_parse_block
     add bx, 2
     inc [word ptr block_length]
     jmp @@parse_block
+
+@@error_too_many_instructions:
+    push [file_idx]
+    push offset error_message_too_many_instructions
+    call interpreter_runtime_error
 
 @@finish_parse:
     mov ax, es
