@@ -733,7 +733,7 @@ proc heap_alloc
 
     ; If we got here, we had an allocation failure
     push offset error_message_allocation_failure
-    call interpreter_runtime_error_no_state
+    call runtime_error_no_state
 
 @@allocation_success:
 
@@ -998,7 +998,7 @@ proc open_file
 
     ; If we got here, there are not enough arguments
     push offset error_message_not_enough_arguments
-    call interpreter_runtime_error_no_state
+    call runtime_error_no_state
 
 @@has_filename:
 
@@ -1026,7 +1026,7 @@ proc open_file
 
     ; If we couldn't open the file
     push offset error_message_could_not_open_file
-    call interpreter_runtime_error_no_state
+    call runtime_error_no_state
 
 @@file_open_succeeded:
 
@@ -3593,7 +3593,7 @@ proc parser_parse_block
 @@error_too_many_instructions:
     push [file_idx]
     push offset error_message_too_many_instructions
-    call interpreter_runtime_error
+    call runtime_error
 
 @@finish_parse:
     mov ax, es
@@ -3851,7 +3851,7 @@ proc operator_mul_func
     ; If we got here, we overflowed
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_mul_overflow
-    call interpreter_runtime_error
+    call runtime_error
 
 @@not_overflowed:
 
@@ -3882,7 +3882,7 @@ proc operator_div_func
 
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_div_by_zero
-    call interpreter_runtime_error
+    call runtime_error
 
 @@not_div_by_zero:
     mov ax, [lhs]
@@ -3926,7 +3926,7 @@ proc operator_mod_func
 
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_div_by_zero
-    call interpreter_runtime_error
+    call runtime_error
 
 @@not_div_by_zero:
     mov ax, [lhs]
@@ -4353,7 +4353,7 @@ proc object_number_chr
 
 @@error_number_invalid:
     push offset error_message_chr_number_invalid
-    call interpreter_runtime_error_no_state
+    call runtime_error_no_state
 
 @@end_run:
 
@@ -4501,7 +4501,7 @@ proc object_string_chr
 
 @@error_string_invalid:
     push offset error_message_string_not_char
-    call interpreter_runtime_error_no_state
+    call runtime_error_no_state
 
 @@end_run:
 
@@ -4926,7 +4926,7 @@ proc expr_binary_operator_eval
     mov es, ax
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_invalid_operator_types
-    call interpreter_runtime_error
+    call runtime_error
 
 @@type_match:
     add bx, [func_offset] ; Make bx the index of the function pointer
@@ -4979,7 +4979,7 @@ proc expr_prefix_operator_eval
     mov es, ax
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_invalid_operator_type
-    call interpreter_runtime_error
+    call runtime_error
 
 @@had_fn:
 
@@ -5121,7 +5121,7 @@ proc expr_vector_eval
     ; Call error with the index of x
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_expected_number
-    call interpreter_runtime_error
+    call runtime_error
 
 @@y_not_number:
     ; Set es to expr
@@ -5133,7 +5133,7 @@ proc expr_vector_eval
     ; Call error with the index of y
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_expected_number
-    call interpreter_runtime_error
+    call runtime_error
 
 @@end_eval:
 
@@ -5167,7 +5167,7 @@ proc expr_var_eval
     ; If we got here, we didn't find a variable
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_variable_not_found
-    call interpreter_runtime_error
+    call runtime_error
 
 @@found_variable:
 
@@ -5930,7 +5930,7 @@ proc instruction_line_execute
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_expected_vector
-    call interpreter_runtime_error
+    call runtime_error
 
 @@error_arg2_not_number:
     ; Set es to arg2 expr
@@ -5941,7 +5941,7 @@ proc instruction_line_execute
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_expected_number
-    call interpreter_runtime_error
+    call runtime_error
 
 @@error_invalid_arguments:
     mov ax, [instruction_ptr]
@@ -5949,7 +5949,7 @@ proc instruction_line_execute
     ; Error
     push [es:INSTRUCTION_OFF_FILE_INDEX]
     push offset error_message_invalid_argument_values
-    call interpreter_runtime_error
+    call runtime_error
 
 @@end_execute:
 
@@ -6079,7 +6079,7 @@ proc instruction_position_size_execute
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_expected_vector
-    call interpreter_runtime_error
+    call runtime_error
 
 @@error_arg2_not_vector:
     ; Set es to arg2 expr
@@ -6090,7 +6090,7 @@ proc instruction_position_size_execute
     ; Error
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_expected_vector
-    call interpreter_runtime_error
+    call runtime_error
 
 @@error_invalid_arguments:
     mov ax, [instruction_ptr]
@@ -6098,7 +6098,7 @@ proc instruction_position_size_execute
     ; Error
     push [es:INSTRUCTION_OFF_FILE_INDEX]
     push offset error_message_invalid_argument_values
-    call interpreter_runtime_error
+    call runtime_error
 
 @@end_execute:
 
@@ -6242,14 +6242,14 @@ proc instruction_setcolor_execute
     mov es, ax
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_expected_number
-    call interpreter_runtime_error
+    call runtime_error
 
 @@error_invalid_argument:
     mov ax, [instruction_ptr]
     mov es, ax
     push [es:INSTRUCTION_OFF_FILE_INDEX]
     push offset error_message_invalid_argument_values
-    call interpreter_runtime_error
+    call runtime_error
 
 @@end_execute:
     push [arg_ptr]
@@ -6358,14 +6358,14 @@ proc instruction_setwritepos_execute
     mov es, ax
     push [es:EXPR_OFF_FILE_INDEX]
     push offset error_message_expected_number
-    call interpreter_runtime_error
+    call runtime_error
 
 @@error_invalid_argument:
     mov ax, [instruction_ptr]
     mov es, ax
     push [es:INSTRUCTION_OFF_FILE_INDEX]
     push offset error_message_invalid_argument_values
-    call interpreter_runtime_error
+    call runtime_error
 
 @@end_execute:
     push [arg_ptr]
@@ -6560,7 +6560,7 @@ proc interpreter_set_variable
 
 @@error_too_many_variables:
     push offset error_message_too_many_variables
-    call interpreter_runtime_error_no_state
+    call runtime_error_no_state
 
 @@variable_was_set:
 
@@ -6618,7 +6618,7 @@ endp interpreter_get_variable
 ; Print a minimized RuntimeError
 ; This version shows no line/column information and does not show the line the error occured in
 message_ptr = bp + 4
-proc interpreter_runtime_error_no_state
+proc runtime_error_no_state
     push bp
     mov bp, sp
     push ax
@@ -6646,12 +6646,12 @@ proc interpreter_runtime_error_no_state
     pop ax
     pop bp
     ret 2
-endp interpreter_runtime_error_no_state
+endp runtime_error_no_state
 
 ; Writes a message in the format "RuntimeError [line l, column c]: Error message" and exits
 message_ptr = bp + 4
 index = bp + 6
-proc interpreter_runtime_error
+proc runtime_error
     push bp
     mov bp, sp
     push ax
@@ -6669,7 +6669,7 @@ proc interpreter_runtime_error
     pop ax
     pop bp
     ret 4
-endp interpreter_runtime_error
+endp runtime_error
 
 ; Remove data related to the interpreter
 proc interpreter_delete
