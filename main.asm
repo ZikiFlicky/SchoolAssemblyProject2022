@@ -1040,12 +1040,14 @@ endp open_file
 ; Closes our file
 proc close_file
     push ax
+    push bx
 
     ; Interrupt for closing files
     mov ah, 3Eh
     mov bx, [file]
     int 21h
 
+    pop bx
     pop ax
     ret
 endp close_file
