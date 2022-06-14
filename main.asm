@@ -6,6 +6,7 @@ DATASEG
     PSP_segment dw ?
 
     ; File related
+    have_file db 0
     file dw ? ; Stores handle
     file_idx dw 0 ; Stores index
     file_read_buffer db 40h dup(?) ; Small read buffer
@@ -411,6 +412,7 @@ proc panic
     ; Print panic message
     push offset panic_message
     call print_data_cstr
+    call prepare_for_exit
     call exit_fail
     ; We should never reach this code
     ret
@@ -839,6 +841,22 @@ proc error_setup
     ret
 endp error_setup
 
+; Close file if opened, call parser_delete and call interpreter_delete
+proc prepare_for_exit
+    call interpreter_delete
+    call parser_delete
+
+    cmp [byte ptr have_file], 0
+    je @@no_file
+
+    call close_file
+
+@@no_file:
+    call wait_for_user_end_execution
+
+    ret
+endp prepare_for_exit
+
 ; Print the rest of the line from the index onwards
 index = bp + 4
 backtrack = bp - 2
@@ -1029,6 +1047,7 @@ proc open_file
 
 @@file_open_succeeded:
 
+    mov [byte ptr have_file], 1
     mov [file], ax
 
     pop es
@@ -1973,7 +1992,7 @@ proc lexer_error
     push offset lexer_error_start
     call show_file_error
 
-    call wait_for_user_end_execution
+    call prepare_for_exit
     call exit_fail
 
     pop ax
@@ -2511,7 +2530,7 @@ proc parser_error
     push offset parser_error_start
     call show_file_error
 
-    call wait_for_user_end_execution
+    call prepare_for_exit
     call exit_fail
 
     pop ax
@@ -6636,7 +6655,7 @@ proc runtime_error_no_state
     call print_data_cstr
     call print_newline
 
-    call wait_for_user_end_execution
+    call prepare_for_exit
     call exit_fail
 
     pop dx
@@ -6662,7 +6681,7 @@ proc runtime_error
     push offset runtime_error_start
     call show_file_error
 
-    call wait_for_user_end_execution
+    call prepare_for_exit
     call exit_fail
 
     pop ax
@@ -7223,12 +7242,9 @@ start:
 
     call parser_parse
     call interpreter_execute
-    call interpreter_delete
-    call parser_delete
 
-    call close_file
-
-    call wait_for_user_end_execution
+    ; Remove everything and wait for a press on the Escape key
+    call prepare_for_exit
 
     ; Set back to text mode
     mov ah, 0
