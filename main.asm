@@ -103,7 +103,6 @@ DATASEG
                        db TOKEN_TYPE_PIPE_PIPE, "||"
     AMOUNT_DOUBLE_BYTE_TOKENS = 6
 
-
     ; Expr types
     EXPR_TYPE_NUMBER = 1
     EXPR_TYPE_VAR = 2
@@ -4995,7 +4994,6 @@ proc expr_prefix_operator_eval
     ret 4
 endp expr_prefix_operator_eval
 
-
 ; Evaluate a number expression and return the resulted number object
 expr_ptr = bp + 4
 proc expr_number_eval
@@ -5015,7 +5013,6 @@ proc expr_number_eval
     pop bp
     ret 2
 endp expr_number_eval
-
 
 ; Evaluate a string expression and return the resulted string: "string"
 expr_ptr = bp + 4
