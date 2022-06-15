@@ -1,0 +1,17 @@
+# Do some calculations
+a = 4 + 4
+Show a
+Show a / 3
+Show a - 2
+Show a * 4 - 2
+Show a % 3
+Show 4 * (a - 2)
+Show 4 > 2
+Show 4 > 5
+Show 4 < 2
+Show 4 < 5
+Show 5 >= 5
+Show 5 <= 5
+Show a == 8
+Show a != 8
+Show a != 7
