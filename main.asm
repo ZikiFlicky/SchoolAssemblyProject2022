@@ -5978,7 +5978,7 @@ proc instruction_line_execute
     ret 6
 endp instruction_line_execute
 
-; Exectue the `XLine` code instruction
+; Execute the `XLine` code instruction
 instruction_ptr = bp + 4
 proc instruction_xline_execute
     push bp
@@ -5993,7 +5993,7 @@ proc instruction_xline_execute
     ret 2
 endp instruction_xline_execute
 
-; Exectue the `YLine` code instruction
+; Execute the `YLine` code instruction
 instruction_ptr = bp + 4
 proc instruction_yline_execute
     push bp
@@ -6127,7 +6127,7 @@ proc instruction_position_size_execute
     ret 4
 endp instruction_position_size_execute
 
-; Exectue the `Rect` code instruction
+; Execute the `Rect` code instruction
 instruction_ptr = bp + 4
 proc instruction_rect_execute
     push bp
@@ -6141,7 +6141,7 @@ proc instruction_rect_execute
     ret 2
 endp instruction_rect_execute
 
-; Exectue the `FilledRect` code instruction
+; Execute the `FilledRect` code instruction
 instruction_ptr = bp + 4
 proc instruction_filledrect_execute
     push bp
@@ -6155,7 +6155,7 @@ proc instruction_filledrect_execute
     ret 2
 endp instruction_filledrect_execute
 
-; Exectue the `DiagonalLine` code instruction
+; Execute the `DiagonalLine` code instruction
 instruction_ptr = bp + 4
 proc instruction_diagonalline_execute
     push bp
@@ -6169,7 +6169,7 @@ proc instruction_diagonalline_execute
     ret 2
 endp instruction_diagonalline_execute
 
-; Exectue the `Show` code instruction
+; Execute the `Show` code instruction
 instruction_ptr = bp + 4
 proc instruction_show_execute
     push bp
@@ -6215,7 +6215,7 @@ proc instruction_show_execute
     ret 2
 endp instruction_show_execute
 
-; Exectue the `SetColor` code instruction
+; Execute the `SetColor` code instruction
 instruction_ptr = bp + 4
 arg_ptr = bp - 2
 color = bp - 3
@@ -6398,7 +6398,7 @@ proc instruction_setwritepos_execute
     ret 2
 endp instruction_setwritepos_execute
 
-; Exectue an instruction segment given as a parameter
+; Execute an instruction segment given as a parameter
 instruction_ptr = bp + 4
 proc instruction_execute
     push bp
